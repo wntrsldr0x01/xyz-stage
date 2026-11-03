@@ -5,7 +5,7 @@ Jog + grid-sweep console and custom Marlin firmware for an XYZ stage built on a 
 Browser console for jogging and running grid sweeps over USB serial (Marlin, 250000 baud).
 
 ```
-pip install pyserial
+pip install -r requirements.txt
 python3 server.py          # open http://localhost:8780
 python3 server.py --mock   # simulated printer
 ```
