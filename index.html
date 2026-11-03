@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Gantry Console</title>
+<style>
+  :root{
+    --bg:#101214; --panel:#181b1f; --line:#2a2f36; --ink:#e7e9ec; --dim:#8b939e;
+    --acc:#2ecc8f; --warn:#f0b429; --bad:#ef5350; --x:#ff7a59; --y:#4fc3f7; --z:#b39ddb;
+    --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:13px/1.4 -apple-system,system-ui,sans-serif}
+  header{display:flex;gap:10px;align-items:center;padding:10px 16px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+  header h1{font-size:14px;letter-spacing:.08em;text-transform:uppercase;margin:0 12px 0 0;color:var(--acc)}
+  .grow{flex:1}
+  main{display:grid;grid-template-columns:330px 1fr 420px;gap:12px;padding:12px;min-height:calc(100vh - 54px)}
+  @media(max-width:1250px){main{grid-template-columns:1fr 1fr}}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px;display:flex;flex-direction:column;gap:10px}
+  .panel h2{margin:0;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim)}
+  button{background:#232830;color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:7px 10px;cursor:pointer;font:inherit}
+  button:hover{border-color:var(--dim)} button:active{transform:translateY(1px)}
+  button.pri{background:var(--acc);color:#04140d;border-color:var(--acc);font-weight:600}
+  button.danger{background:var(--bad);border-color:var(--bad);color:#fff;font-weight:700}
+  button.sel{border-color:var(--acc);color:var(--acc)}
+  button:disabled{opacity:.4;cursor:default}
+  input,select,textarea{background:#0c0e10;color:var(--ink);border:1px solid var(--line);border-radius:5px;padding:5px 7px;font:12px var(--mono);width:100%}
+  label{display:flex;flex-direction:column;gap:3px;color:var(--dim);font-size:11px}
+  .row{display:flex;gap:8px;align-items:end}
+  .row>*{flex:1}
+  .dro{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+  .dro div{background:#0c0e10;border:1px solid var(--line);border-radius:6px;padding:8px;text-align:right;font:600 22px var(--mono)}
+  .dro span{display:block;text-align:left;font:600 11px var(--mono);letter-spacing:.1em}
+  .ax-X{color:var(--x)} .ax-Y{color:var(--y)} .ax-Z{color:var(--z)}
+  .pad{display:grid;grid-template-columns:repeat(3,56px) 18px 56px;grid-template-rows:repeat(3,56px);gap:6px;justify-content:center}
+  .pad button{font:700 14px var(--mono);padding:0}
+  .steps{display:flex;gap:4px} .steps button{flex:1;padding:5px 0;font:12px var(--mono)}
+  .pill{font:11px var(--mono);padding:3px 8px;border-radius:99px;border:1px solid var(--line);color:var(--dim)}
+  .pill.ok{color:var(--acc);border-color:var(--acc)} .pill.warn{color:var(--warn);border-color:var(--warn)} .pill.bad{color:var(--bad);border-color:var(--bad)}
+  #log{flex:1;min-height:200px;max-height:42vh;overflow:auto;background:#0c0e10;border:1px solid var(--line);border-radius:6px;padding:6px;font:11px/1.5 var(--mono);white-space:pre-wrap}
+  .tx{color:var(--y)} .rx{color:var(--dim)} .sys{color:var(--warn)}
+  canvas{width:100%;background:#0c0e10;border:1px solid var(--line);border-radius:6px}
+  .bar{height:8px;background:#0c0e10;border-radius:4px;overflow:hidden;border:1px solid var(--line)}
+  .bar i{display:block;height:100%;background:var(--acc);width:0}
+  .pts{max-height:150px;overflow:auto;display:flex;flex-direction:column;gap:4px}
+  .pts div{display:flex;gap:6px;align-items:center;font:11px var(--mono)} .pts div b{flex:1;font-weight:400}
+  .pts button{padding:3px 7px;font-size:11px}
+  .note{font-size:11px;color:var(--dim)} .err{color:var(--bad);font-size:12px;min-height:16px}
+  details summary{cursor:pointer;color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.1em}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px} .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
+  .chk{flex-direction:row;align-items:center;gap:6px} .chk input{width:auto}
+  .restore{display:flex;flex-direction:column;gap:6px;border:1px solid var(--warn);border-radius:6px;padding:8px}
+  .restore[hidden]{display:none}
+</style>
+</head>
+<body>
+<header>
+  <h1>Gantry Console</h1>
+  <select id="port" style="width:230px"></select>
+  <input id="baud" value="250000" style="width:90px">
+  <button id="connBtn" class="pri">Connect</button>
+  <span id="connPill" class="pill">offline</span>
+  <span id="refPill" class="pill warn">not referenced</span>
+  <span id="busyPill" class="pill">idle</span>
+  <span class="grow"></span>
+  <button class="danger" id="estop" title="M112. Marlin 1.1 processes it after the current command; the power switch is the real e-stop.">E-STOP (M112)</button>
+</header>
+
+<main>
+  <!-- ============ JOG ============ -->
+  <section class="panel">
+    <h2>Position</h2>
+    <div class="dro">
+      <div><span class="ax-X">X</span><b id="dX">—</b></div>
+      <div><span class="ax-Y">Y</span><b id="dY">—</b></div>
+      <div><span class="ax-Z">Z</span><b id="dZ">—</b></div>
+    </div>
+
+    <h2>Jog</h2>
+    <div class="steps" id="steps"></div>
+    <div class="pad">
+      <span></span><button data-j="Y+" class="ax-Y">Y+</button><span></span><span></span><button data-j="Z+" class="ax-Z">Z+</button>
+      <button data-j="X-" class="ax-X">X−</button><button id="m114" title="Refresh position (M114)">⟳</button><button data-j="X+" class="ax-X">X+</button><span></span><span></span>
+      <span></span><button data-j="Y-" class="ax-Y">Y−</button><span></span><span></span><button data-j="Z-" class="ax-Z">Z−</button>
+    </div>
+    <div class="err" id="jogErr"></div>
+    <div class="note">Keys: ←→ X · ↑↓ Y · PgUp/PgDn Z · [ ] change step · H go home</div>
+    <div class="grid2">
+      <label>XY feed mm/min<input id="fXY" type="number"></label>
+      <label>Z feed mm/min<input id="fZ" type="number"></label>
+    </div>
+
+    <h2>Work zero</h2>
+    <div class="grid3">
+      <button data-zero="XYZ" class="pri">Zero XYZ</button>
+      <button data-zero="XY">Zero XY</button>
+      <button data-zero="Z">Zero Z</button>
+    </div>
+    <div class="note">No endstops are fitted: jog to a reference corner and zero there.</div>
+    <div id="restoreBox" class="restore" hidden>
+      <span class="note">Board was reset by the reconnect. If nothing moved by hand, restore the last position so saved points and home still line up:</span>
+      <button id="restoreBtn" class="pri"></button>
+    </div>
+    <div class="grid2">
+      <button id="gotoZero">Go to 0,0</button>
+      <button id="motorsOff">Motors off (M84)</button>
+    </div>
+
+    <h2>Home</h2>
+    <div class="grid2">
+      <button id="goHome" class="pri" title="Lifts Z first, then XY, then lowers (key: H)">⌂ Go home</button>
+      <button id="setHome">Set home here</button>
+    </div>
+    <div class="note" id="homeInfo">no home saved</div>
+
+    <h2>Saved positions</h2>
+    <div class="row"><input id="ptName" placeholder="name"><button id="savePt" style="flex:0 0 auto">Save current</button></div>
+    <div class="pts" id="pts"></div>
+
+    <h2>Go to</h2>
+    <div class="grid3">
+      <label>X<input id="gX" type="number" step="0.1"></label>
+      <label>Y<input id="gY" type="number" step="0.1"></label>
+      <label>Z<input id="gZ" type="number" step="0.1"></label>
+    </div>
+    <button id="gotoBtn">Move</button>
+  </section>
+
+  <!-- ============ SWEEP ============ -->
+  <section class="panel">
+    <h2>Grid sweep</h2>
+    <div class="grid3">
+      <label>X start<input data-s="x0" type="number" step="0.1"></label>
+      <label>X end<input data-s="x1" type="number" step="0.1"></label>
+      <label>X points<input data-s="nx" type="number" min="1"></label>
+      <label>Y start<input data-s="y0" type="number" step="0.1"></label>
+      <label>Y end<input data-s="y1" type="number" step="0.1"></label>
+      <label>Y points<input data-s="ny" type="number" min="1"></label>
+    </div>
+    <div class="row">
+      <button id="fromCorner0" title="Use current X/Y as start corner">Start ← here</button>
+      <button id="fromCorner1" title="Use current X/Y as end corner">End ← here</button>
+      <span class="note" id="spacing"></span>
+    </div>
+    <div class="grid3">
+      <label>Pattern
+        <select data-s="pattern">
+          <option value="serpentine_x">Serpentine, rows along X</option>
+          <option value="serpentine_y">Serpentine, columns along Y</option>
+          <option value="raster_x">Raster, rows along X</option>
+          <option value="raster_y">Raster, columns along Y</option>
+        </select></label>
+      <label>Sweep Z<input data-s="z" type="number" step="0.1"></label>
+      <label>Dwell per point (ms)<input data-s="dwell_ms" type="number" min="0"></label>
+      <label class="chk"><input data-s="lift" type="checkbox"> Lift between points</label>
+      <label>Safe Z<input data-s="safe_z" type="number" step="0.1"></label>
+      <label>Passes<input data-s="passes" type="number" min="1"></label>
+      <label class="chk"><input data-s="return_home" type="checkbox"> Return to start at end</label>
+      <label>Start at point #<input data-s="start_index" type="number" min="0"></label>
+    </div>
+    <label>G-code at each point (after arrival + dwell). Placeholders: {i} {row} {col} {x} {y} {z}
+      <textarea data-s="per_point_gcode" rows="2" placeholder="e.g.  M118 POINT {i} {x} {y}   or   M42 P6 S255&#10;G4 P50&#10;M42 P6 S0"></textarea></label>
+
+    <canvas id="cv" width="900" height="520"></canvas>
+    <div class="note" id="sweepInfo"></div>
+    <div class="bar"><i id="prog"></i></div>
+    <div class="row">
+      <button class="pri" id="runBtn">Run sweep</button>
+      <button id="pauseBtn">Pause</button>
+      <button id="stopBtn">Stop</button>
+      <button id="exportBtn">Export .gcode</button>
+    </div>
+    <div class="err" id="sweepErr"></div>
+  </section>
+
+  <!-- ============ RIGHT COLUMN ============ -->
+  <section class="panel">
+    <h2>Terminal</h2>
+    <div id="log"></div>
+    <div class="row"><input id="cmd" placeholder="G-code, Enter to send (↑ history)"><button id="sendBtn" style="flex:0 0 auto">Send</button></div>
+    <div class="row">
+      <button data-q="M114">M114 pos</button><button data-q="M119">M119 endstops</button><button data-q="M503">M503 settings</button>
+    </div>
+
+    <details>
+      <summary>Machine settings</summary>
+      <div style="display:flex;flex-direction:column;gap:8px;margin-top:8px">
+        <label class="chk"><input id="enfLim" type="checkbox"> Enforce console soft limits (firmware has none)</label>
+        <div class="grid3">
+          <label>X min<input data-lim="X0" type="number"></label><label>Y min<input data-lim="Y0" type="number"></label><label>Z min<input data-lim="Z0" type="number"></label>
+          <label>X max<input data-lim="X1" type="number"></label><label>Y max<input data-lim="Y1" type="number"></label><label>Z max<input data-lim="Z1" type="number"></label>
+        </div>
+        <div class="grid3">
+          <label>X steps/mm<input data-spm="X" type="number" step="0.01"></label>
+          <label>Y steps/mm<input data-spm="Y" type="number" step="0.01"></label>
+          <label>Z steps/mm<input data-spm="Z" type="number" step="0.01"></label>
+        </div>
+        <label class="chk"><input id="sendSpm" type="checkbox"> Send M92 steps/mm on connect</label>
+        <div class="row"><button id="saveCfg" class="pri">Save settings</button><button id="applySpm">Apply M92 now</button></div>
+        <h2>Steps/mm calibration</h2>
+        <div class="grid3">
+          <label>Axis<select id="calAx"><option>X</option><option>Y</option><option>Z</option></select></label>
+          <label>Commanded mm<input id="calCmd" type="number" value="50"></label>
+          <label>Measured mm<input id="calMeas" type="number"></label>
+        </div>
+        <button id="calBtn">Compute new steps/mm</button>
+        <div class="note" id="calOut"></div>
+      </div>
+    </details>
+  </section>
+</main>
+
+<script>
+const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
+const STEPS = [0.01, 0.1, 1, 5, 10, 50];
+let step = 1, S = null, logSeq = 0, cfgLoaded = false, preview = [], hist = [], histI = 0;
+
+async function api(path, body){
+  const r = await fetch('/api/' + path, body === undefined ? {} : {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+  return r.json();
+}
+function err(id, msg){ $(id).textContent = msg || ''; if (msg) setTimeout(() => { if ($(id).textContent === msg) $(id).textContent = ''; }, 6000); }
+async function act(path, body, errId='#jogErr'){ const r = await api(path, body); if (r && r.ok === false) err(errId, r.error); return r; }
+
+// ---------- connection ----------
+async function loadPorts(){
+  const {ports} = await api('ports');
+  const sel = $('#port'); const cur = S?.cfg?.port;
+  sel.innerHTML = ports.map(p => `<option ${p===cur?'selected':''}>${p}</option>`).join('') || '<option>(no ports)</option>';
+}
+$('#connBtn').onclick = async () => {
+  if (S?.connected) return act('disconnect', {});
+  $('#connBtn').disabled = true; $('#connBtn').textContent = 'Connecting…';
+  await act('connect', {port: $('#port').value, baud: +$('#baud').value});
+  $('#connBtn').disabled = false;
+};
+$('#estop').onclick = () => act('estop', {});
+
+// ---------- jog ----------
+$('#steps').innerHTML = STEPS.map(s => `<button data-step="${s}">${s}</button>`).join('');
+function setStep(s){ step = s; $$('[data-step]').forEach(b => b.classList.toggle('sel', +b.dataset.step === s)); }
+$$('[data-step]').forEach(b => b.onclick = () => setStep(+b.dataset.step)); setStep(1);
+function jog(ax, dir){
+  const feed = ax === 'Z' ? +$('#fZ').value : +$('#fXY').value;
+  act('jog', {axis: ax, delta: dir * step, feed});
+}
+$$('[data-j]').forEach(b => b.onclick = () => jog(b.dataset.j[0], b.dataset.j[1] === '+' ? 1 : -1));
+$('#m114').onclick = () => act('send', {gcode:'M114'});
+document.addEventListener('keydown', e => {
+  if (['INPUT','TEXTAREA','SELECT'].includes(document.activeElement.tagName)) return;
+  const k = {ArrowLeft:['X',-1], ArrowRight:['X',1], ArrowUp:['Y',1], ArrowDown:['Y',-1], PageUp:['Z',1], PageDown:['Z',-1]}[e.key];
+  if (k){ e.preventDefault(); if (!e.repeat) jog(...k); return; }  // ignore auto-repeat so a held key can't queue a runaway move
+  const i = STEPS.indexOf(step);
+  if (e.key === 'h' || e.key === 'H') { if (S?.cfg?.home) act('home/go', {}); return; }
+  if (e.key === '[') setStep(STEPS[Math.max(0, i-1)]);
+  if (e.key === ']') setStep(STEPS[Math.min(STEPS.length-1, i+1)]);
+});
+$$('[data-zero]').forEach(b => b.onclick = () => act('zero', {axes: b.dataset.zero}));
+$('#gotoZero').onclick = () => act('goto', {x:0, y:0});
+$('#motorsOff').onclick = () => act('send', {gcode:'M84'});
+const num = id => $(id).value === '' ? null : +$(id).value;
+$('#gotoBtn').onclick = () => act('goto', {x:num('#gX'), y:num('#gY'), z:num('#gZ')});
+['#fXY','#fZ'].forEach(id => $(id).onchange = () => api('config', {feed:{XY:+$('#fXY').value, Z:+$('#fZ').value}}));
+
+// ---------- home + saved positions ----------
+const fmtP = p => `<span class="ax-X">${p.x.toFixed(2)}</span> <span class="ax-Y">${p.y.toFixed(2)}</span> <span class="ax-Z">${p.z.toFixed(2)}</span>`;
+const isHome = p => { const h = S.cfg.home; return h && h.x === p.x && h.y === p.y && h.z === p.z; };
+function renderHome(){
+  const h = S.cfg.home;
+  $('#homeInfo').innerHTML = h ? `home: ${fmtP(h)}` : 'no home saved: jog there and press Set home here';
+  $('#goHome').disabled = !h;
+}
+async function setHomeTo(h){ await api('config', {home: h}); S.cfg.home = h; renderHome(); renderPts(); }
+function renderPts(){
+  const pts = S.cfg.saved_points || [];
+  $('#pts').innerHTML = pts.map((p,i) => `<div><b>${isHome(p) ? '⌂ ' : ''}${p.name}  ${fmtP(p)}</b>
+    <button data-go="${i}" title="Lift, travel, lower">Go</button>
+    <button data-home="${i}" title="Make this the home point">⌂</button>
+    <button data-del="${i}">✕</button></div>`).join('') || '<span class="note">none yet</span>';
+  // Same lift-travel-lower move as Go home, so a saved point never drags across the work.
+  $$('[data-go]').forEach(b => b.onclick = () => { const p = pts[+b.dataset.go]; act('goto_safe', {x:p.x, y:p.y, z:p.z}); });
+  $$('[data-home]').forEach(b => b.onclick = () => { const p = pts[+b.dataset.home]; setHomeTo({x:p.x, y:p.y, z:p.z}); });
+  $$('[data-del]').forEach(b => b.onclick = () => { pts.splice(+b.dataset.del, 1); api('config', {saved_points: pts}); renderPts(); });
+}
+$('#savePt').onclick = () => {
+  const p = S.pos; if (p.X === null) return err('#jogErr', 'position unknown');
+  // Coordinates are only meaningful relative to a zero; saving before one would point nowhere.
+  if (!S.referenced) return err('#jogErr', 'press Zero (or Restore) before saving positions');
+  const pts = S.cfg.saved_points || [];
+  pts.push({name: $('#ptName').value || `P${pts.length+1}`, x:p.X, y:p.Y, z:p.Z});
+  api('config', {saved_points: pts}); $('#ptName').value = ''; renderPts();
+};
+$('#goHome').onclick = () => act('home/go', {});
+$('#setHome').onclick = async () => {
+  const h = S.cfg.home;
+  if (h && !confirm(`Replace home (${h.x.toFixed(2)}, ${h.y.toFixed(2)}, ${h.z.toFixed(2)}) with the current position?`)) return;
+  const r = await act('home/set', {});
+  if (r.ok) { const p = S.pos; S.cfg.home = {x:p.X, y:p.Y, z:p.Z}; renderHome(); renderPts(); }
+};
+$('#restoreBtn').onclick = () => act('restore', {});
+
+// ---------- terminal ----------
+function sendCmd(){
+  const v = $('#cmd').value.trim(); if (!v) return;
+  hist.push(v); histI = hist.length; act('send', {gcode:v}); $('#cmd').value = '';
+}
+$('#sendBtn').onclick = sendCmd;
+$('#cmd').onkeydown = e => {
+  if (e.key === 'Enter') sendCmd();
+  if (e.key === 'ArrowUp' && hist.length){ histI = Math.max(0, histI-1); $('#cmd').value = hist[histI]; e.preventDefault(); }
+  if (e.key === 'ArrowDown'){ histI = Math.min(hist.length, histI+1); $('#cmd').value = hist[histI] || ''; }
+};
+$$('[data-q]').forEach(b => b.onclick = () => act('send', {gcode:b.dataset.q}));
+
+// ---------- sweep ----------
+function sweepParams(){
+  const p = {};
+  $$('[data-s]').forEach(el => {
+    const k = el.dataset.s;
+    p[k] = el.type === 'checkbox' ? el.checked : (el.type === 'number' ? +el.value : el.value);
+  });
+  return p;
+}
+function fillSweep(p){ $$('[data-s]').forEach(el => { const v = p[el.dataset.s]; if (v === undefined) return; el.type === 'checkbox' ? el.checked = v : el.value = v; }); }
+let pvTimer;
+function schedulePreview(){ clearTimeout(pvTimer); pvTimer = setTimeout(doPreview, 150); }
+async function doPreview(){
+  const p = sweepParams();
+  const r = await api('sweep/preview', p);
+  preview = r.points || [];
+  const dx = p.nx > 1 ? (p.x1 - p.x0)/(p.nx-1) : 0, dy = p.ny > 1 ? (p.y1 - p.y0)/(p.ny-1) : 0;
+  $('#spacing').textContent = `pitch ${Math.abs(dx).toFixed(3)} × ${Math.abs(dy).toFixed(3)} mm`;
+  let path = 0; for (let i=1;i<preview.length;i++) path += Math.hypot(preview[i].x-preview[i-1].x, preview[i].y-preview[i-1].y);
+  const fxy = +$('#fXY').value || 1500;
+  const est = p.passes * (path / (fxy/60) + preview.length * (p.dwell_ms/1000 + 0.15 + (p.lift ? 2*Math.abs(p.safe_z-p.z)/((+$('#fZ').value||300)/60) : 0)));
+  $('#sweepInfo').textContent = `${preview.length} points × ${p.passes} pass(es) · path ${path.toFixed(1)} mm · est. ${fmtT(est)}`;
+  $('#sweepErr').textContent = r.warning ? '⚠ ' + r.warning : '';
+  draw();
+}
+function fmtT(s){ return s < 90 ? `${s.toFixed(0)} s` : `${(s/60).toFixed(1)} min`; }
+$$('[data-s]').forEach(el => el.addEventListener('input', schedulePreview));
+$('#fromCorner0').onclick = () => { if (S.pos.X===null) return; $('[data-s=x0]').value = S.pos.X; $('[data-s=y0]').value = S.pos.Y; schedulePreview(); };
+$('#fromCorner1').onclick = () => { if (S.pos.X===null) return; $('[data-s=x1]').value = S.pos.X; $('[data-s=y1]').value = S.pos.Y; schedulePreview(); };
+
+function draw(){
+  const cv = $('#cv'), g = cv.getContext('2d'), W = cv.width, H = cv.height, pad = 36;
+  g.clearRect(0,0,W,H);
+  if (!S) return;
+  const L = S.cfg.limits, pos = S.pos;
+  // Frame = machine limits, so you see the sweep in context of the reachable bed.
+  let xs = [L.X[0], L.X[1], ...preview.map(p=>p.x)], ys = [L.Y[0], L.Y[1], ...preview.map(p=>p.y)];
+  if (pos.X !== null){ xs.push(pos.X); ys.push(pos.Y); }
+  const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+  const sc = Math.min((W-2*pad)/((x1-x0)||1), (H-2*pad)/((y1-y0)||1));
+  const ox = pad + ((W-2*pad) - (x1-x0)*sc)/2, oy = pad + ((H-2*pad) - (y1-y0)*sc)/2;
+  const tx = x => ox + (x-x0)*sc, ty = y => H - (oy + (y-y0)*sc);
+  g.strokeStyle = '#2a2f36'; g.setLineDash([4,4]); g.strokeRect(tx(L.X[0]), ty(L.Y[1]), (L.X[1]-L.X[0])*sc, (L.Y[1]-L.Y[0])*sc); g.setLineDash([]);
+  g.fillStyle = '#8b939e'; g.font = '11px ui-monospace,monospace';
+  g.fillText(`X ${L.X[0]}…${L.X[1]}  Y ${L.Y[0]}…${L.Y[1]}  (limits)`, tx(L.X[0]), ty(L.Y[1]) - 8);
+  const sw = S.sweep, n = preview.length, active = ['running','paused'].includes(sw.state);
+  const cur = active ? sw.index % (n||1) : -1, donePass = active ? Math.floor(sw.index/(n||1)) : 0;
+  g.strokeStyle = '#3d6b5a'; g.lineWidth = 1.5; g.beginPath();
+  preview.forEach((p,i) => i ? g.lineTo(tx(p.x), ty(p.y)) : g.moveTo(tx(p.x), ty(p.y))); g.stroke();
+  preview.forEach((p,i) => {
+    g.beginPath(); g.arc(tx(p.x), ty(p.y), i===cur ? 6 : 3.5, 0, 7);
+    g.fillStyle = i===0 ? '#f0b429' : i===cur ? '#fff' : (active && (i<cur) ? '#2ecc8f' : '#4b5560');
+    g.fill();
+  });
+  if (n && n <= 120) { g.fillStyle = '#6b7480'; preview.forEach((p,i) => g.fillText(i, tx(p.x)+5, ty(p.y)-5)); }
+  if (pos.X !== null){
+    const X = tx(pos.X), Y = ty(pos.Y);
+    g.strokeStyle = '#ff7a59'; g.lineWidth = 2; g.beginPath(); g.moveTo(X-10,Y); g.lineTo(X+10,Y); g.moveTo(X,Y-10); g.lineTo(X,Y+10); g.stroke();
+  }
+}
+
+$('#runBtn').onclick = async () => {
+  const p = sweepParams();
+  if (!confirm(`Run ${preview.length} × ${p.passes} point sweep at Z=${p.z}?`)) return;
+  act('sweep/start', p, '#sweepErr');
+};
+$('#pauseBtn').onclick = () => act('sweep/pause', {pause: S.sweep.state !== 'paused'}, '#sweepErr');
+$('#stopBtn').onclick = () => act('sweep/stop', {}, '#sweepErr');
+$('#exportBtn').onclick = async () => {
+  const r = await api('sweep/gcode', sweepParams());
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([r.gcode], {type:'text/plain'}));
+  a.download = `sweep_${Date.now()}.gcode`; a.click();
+};
+
+// ---------- settings ----------
+function fillCfg(c){
+  $('#fXY').value = c.feed.XY; $('#fZ').value = c.feed.Z; $('#baud').value = c.baud;
+  $('#enfLim').checked = c.enforce_limits; $('#sendSpm').checked = c.send_steps_on_connect;
+  $$('[data-lim]').forEach(el => el.value = c.limits[el.dataset.lim[0]][+el.dataset.lim[1]]);
+  $$('[data-spm]').forEach(el => el.value = c.steps_per_mm[el.dataset.spm]);
+  fillSweep(c.sweep);
+}
+function readCfg(){
+  const limits = {X:[0,0],Y:[0,0],Z:[0,0]}; $$('[data-lim]').forEach(el => limits[el.dataset.lim[0]][+el.dataset.lim[1]] = +el.value);
+  const spm = {}; $$('[data-spm]').forEach(el => spm[el.dataset.spm] = +el.value);
+  return {limits, steps_per_mm: spm, enforce_limits: $('#enfLim').checked, send_steps_on_connect: $('#sendSpm').checked};
+}
+$('#saveCfg').onclick = async () => { await api('config', readCfg()); schedulePreview(); };
+$('#applySpm').onclick = () => { const s = readCfg().steps_per_mm; act('send', {gcode:`M92 X${s.X} Y${s.Y} Z${s.Z}`}); };
+$('#calBtn').onclick = () => {
+  const ax = $('#calAx').value, cur = +$(`[data-spm=${ax}]`).value, c = +$('#calCmd').value, m = +$('#calMeas').value;
+  if (!m) return;
+  const nv = cur * c / m;
+  $(`[data-spm=${ax}]`).value = nv.toFixed(3);
+  $('#calOut').textContent = `${ax}: ${cur} → ${nv.toFixed(3)} steps/mm (field updated; Save + Apply to use it)`;
+};
+
+// ---------- poll ----------
+async function poll(){
+  try {
+    S = await api('state?since=' + logSeq);
+    if (!cfgLoaded){ fillCfg(S.cfg); cfgLoaded = true; loadPorts(); schedulePreview(); renderPts(); renderHome(); }
+    for (const a of ['X','Y','Z']) $('#d'+a).textContent = S.pos[a] === null ? '—' : S.pos[a].toFixed(3);
+    $('#connBtn').textContent = S.connected ? 'Disconnect' : 'Connect';
+    $('#connBtn').classList.toggle('pri', !S.connected);
+    const cp = $('#connPill');
+    cp.textContent = S.halted ? 'HALTED: Disconnect + Connect' : S.connected ? (S.mock ? 'MOCK' : 'connected') : 'offline';
+    cp.className = 'pill ' + (S.connected && !S.halted ? 'ok' : 'bad');
+    renderHome();
+    const lp = S.last_pos, rb = $('#restoreBox'); rb.hidden = !(lp && S.connected && !S.halted);
+    if (lp) $('#restoreBtn').textContent = `Restore X${lp.X.toFixed(2)} Y${lp.Y.toFixed(2)} Z${lp.Z.toFixed(2)}`;
+    const rp = $('#refPill'); rp.textContent = S.referenced ? 'referenced' : 'not referenced'; rp.className = 'pill ' + (S.referenced ? 'ok' : 'warn');
+    const bp = $('#busyPill'); bp.textContent = S.busy ? `busy: ${S.busy}${S.queue ? ` (+${S.queue})` : ''}` : 'idle'; bp.className = 'pill ' + (S.busy ? 'warn' : '');
+    const sw = S.sweep;
+    $('#prog').style.width = sw.total ? (100*sw.index/sw.total) + '%' : '0';
+    $('#pauseBtn').textContent = sw.state === 'paused' ? 'Resume' : 'Pause';
+    $('#runBtn').disabled = ['running','paused'].includes(sw.state);
+    if (sw.state !== 'idle') {
+      const el = sw.started ? (Date.now()/1000 - sw.started) : 0;
+      $('#sweepInfo').dataset.live = `${sw.state.toUpperCase()} · point ${Math.min(sw.index, sw.total)}/${sw.total} · ${fmtT(el)} elapsed ${sw.msg ? '· ' + sw.msg : ''}`;
+      $('#sweepErr').textContent = sw.state === 'error' ? sw.msg : $('#sweepErr').textContent;
+      $('#sweepInfo').title = $('#sweepInfo').dataset.live;
+      $('#sweepInfo').textContent = $('#sweepInfo').dataset.live;
+    }
+    if (S.log.length){
+      const box = $('#log'), atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 20;
+      box.insertAdjacentHTML('beforeend', S.log.map(([n,d,t]) => `<div class="${d}">${d==='tx'?'› ':d==='sys'?'# ':''}${t.replace(/</g,'&lt;')}</div>`).join(''));
+      logSeq = S.log[S.log.length-1][0];
+      while (box.children.length > 1500) box.firstChild.remove();
+      if (atBottom) box.scrollTop = box.scrollHeight;
+    }
+    draw();
+  } catch(e) { $('#connPill').textContent = 'server down'; $('#connPill').className = 'pill bad'; }
+  setTimeout(poll, 300);
+}
+poll();
+</script>
+</body>
+</html>
