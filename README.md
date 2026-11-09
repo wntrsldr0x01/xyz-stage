@@ -31,6 +31,52 @@ firmware/build_and_flash.sh
 This downloads Marlin, applies `configure_marlin.py`, builds, backs up the stock flash + EEPROM to
 `~/marlin-gantry/stock_*.hex` (first run only) and flashes. It prints the restore command at the end.
 
+## SR860 lock-in (USB-TMC)
+Connect the SR860's **rear-panel** USB computer interface (not the front-panel
+flash-drive port) to the laptop. `requirements.txt` installs the official
+`srsinst.sr860` driver plus `pyvisa`/`pyvisa-py`/`pyusb` as the VISA backend --
+no NI-VISA install needed, but `pyusb` needs the `libusb` system library:
+```
+brew install libusb
+```
+With the SR860 powered on and connected, open the console, pick the resource
+from the dropdown in the **SR860 Lock-in** panel (it should look like
+`USB0::0x...::0x...::<serial>::INSTR`) and press Connect. If the dropdown is
+empty, the instrument isn't enumerating as a VISA-TMC device yet -- check the
+cable is in the rear USB-TMC port, not the front flash-drive port.
+
+`python3 server.py --mock` fakes the SR860 too (a slowly rotating X/Y signal),
+for UI work away from the bench.
+
+Measured on the bench (SR860 FW V1.51, macOS, pyvisa-py): a `SNAP? 0,1` round trip takes
+~11 ms (max ~20 ms), so 10 Hz runs hold 10.0 Hz with ~2.5 ms jitter; 20 Hz is the ceiling.
+Things the SR860 does over USB-TMC that the code relies on:
+- `SNAP?` takes 2 or 3 parameters (not 4+ like the SR830). X and Y come from one
+  `SNAP? 0,1`; R and θ are computed from them. The instrument's own R output includes its
+  R offset when that's enabled (it was, at 2.21%), so the front-panel R can differ from
+  `R_V` in the CSV. X/Y offset, expand and ratio settings are recorded in the run JSON and
+  flagged if on, since they change what `X_V`/`Y_V` mean.
+- It holds one pending reply, and reading with no reply pending stalls the USB endpoint,
+  which then stays stalled even across reconnects. Connect detects this and USB-TMC-clears
+  the link automatically. Any failed query during a run ends the run (marked incomplete)
+  and closes the session; press Connect to recover. Unplug/replug the cable if that fails.
+
+Each run writes `runs/AE_<date>_X.._Y.._Z.._<freq>_<id>.csv` (one row per sample, flushed
+as it's taken) and a `.json` sidecar (instrument settings, start/end position, achieved
+rate and jitter, overload/error counts, summary stats).
+
+## XYZ scan
+The **XYZ scan** panel runs the Grid sweep's XY grid over one or more Z planes, using the
+SR860 panel's rate/settle/condition. Per point: move, `M400`, `M114` readback check,
+settle, timed run. Everything goes in `runs/SCAN_<date>_<time>_<condition>/`: each point's
+raw CSV + JSON, `scan_summary.csv` (one row per point) and `scan.json`. Motion commands are
+refused while a scan runs; E-stop isn't.
+
+Blocked/unblocked: record one scan per condition, mark them A and B in the scan list and
+press Compare. The difference is taken on the complex response (ΔX, ΔY of the per-point
+means, |Δ| = √(ΔX²+ΔY²)), not R_A − R_B, and saved as `runs/COMPARE_*.csv`. The run
+history has the same A/B compare for two fixed-position runs.
+
 ## Before first motion
 - **Steps/mm**: X/Y 3200 (1 mm lead screws), Z 400 (8 mm lead screws), assuming 200-step motors at
   16x microstepping. At 3200 steps/mm the board's step rate caps X/Y at ~10 mm/s, so keep XY feed

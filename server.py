@@ -17,6 +17,10 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import urlparse, parse_qs
+
+import daq
+import scan
 
 HERE = Path(__file__).resolve().parent
 CONFIG_PATH = HERE / "config.json"
@@ -39,6 +43,7 @@ DEFAULT_CONFIG = {
         "dwell_ms": 500, "per_point_gcode": "", "passes": 1, "return_home": True,
         "start_index": 0,
     },
+    "daq": dict(daq.DEFAULT_DAQ_CONFIG),
 }
 
 
@@ -580,7 +585,13 @@ def list_ports():
         return []
 
 
-def make_handler(m: Machine):
+# Anything that moves the stage, re-references it, resets the board or starts another
+# acquisition would corrupt a scan in progress. E-stop and disconnects stay allowed.
+BLOCKED_DURING_SCAN = {"connect", "send", "jog", "goto", "goto_safe", "zero", "restore", "home/go",
+                       "sweep/start", "daq/connect", "daq/run/start", "daq/set", "daq/action"}
+
+
+def make_handler(m: Machine, lk: daq.Lockin, sc: scan.Scanner):
     class H(BaseHTTPRequestHandler):
         def log_message(self, *a):
             pass
@@ -594,18 +605,64 @@ def make_handler(m: Machine):
             self.wfile.write(body)
 
         def do_GET(self):
-            if self.path in ("/", "/index.html"):
+            path = urlparse(self.path)
+            q = parse_qs(path.query)
+            if path.path in ("/", "/index.html"):
                 body = (HERE / "index.html").read_bytes()
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
-            elif self.path.startswith("/api/state"):
-                since = int(self.path.split("since=")[1]) if "since=" in self.path else 0
-                self._json(m.state(since))
-            elif self.path == "/api/ports":
+            elif path.path == "/api/state":
+                since = int(q.get("since", [0])[0])
+                state = m.state(since)
+                # Separate cursor: the two logs number their entries independently.
+                state["daq"] = lk.state(int(q.get("dsince", [0])[0]), int(q.get("ssince", [0])[0]))
+                state["scan"] = dict(sc.state)
+                self._json(state)
+            elif path.path == "/api/ports":
                 self._json({"ports": list_ports()})
+            elif path.path == "/api/daq/controls":
+                self._json({"controls": daq.CONTROLS, "actions": {k: v["label"] for k, v in daq.ACTIONS.items()}})
+            elif path.path == "/api/daq/settings":
+                self._json(lk.settings())
+            elif path.path == "/api/daq/resources":
+                self._json({"resources": daq.Lockin.list_resources()})
+            elif path.path == "/api/daq/history":
+                data_dir = q.get("dir", [lk.cfg["data_dir"]])[0]
+                try:
+                    self._json({"ok": True, "runs": daq.list_runs(data_dir)})
+                except Exception as e:
+                    self._json({"ok": False, "error": str(e)}, 400)
+            elif path.path == "/api/daq/history/file":
+                data_dir = q.get("dir", [lk.cfg["data_dir"]])[0]
+                name, ext = q.get("name", [""])[0], q.get("ext", ["csv"])[0]
+                try:
+                    if ext == "json":
+                        self._json({"ok": True, "data": daq.read_run_json(data_dir, name)})
+                    else:
+                        self._json({"ok": True, "rows": daq.read_run_csv(data_dir, name)})
+                except Exception as e:
+                    self._json({"ok": False, "error": str(e)}, 400)
+            elif path.path in ("/api/daq/history/summary", "/api/daq/compare", "/api/scan/list",
+                               "/api/scan/read", "/api/scan/compare"):
+                data_dir = q.get("dir", [lk.cfg["data_dir"]])[0]
+                a, b = q.get("a", [""])[0], q.get("b", [""])[0]
+                try:
+                    if path.path == "/api/daq/history/summary":
+                        r = {"rows": daq.summarize_runs(data_dir), "columns": daq.SUMMARY_COLUMNS}
+                    elif path.path == "/api/daq/compare":
+                        r = scan.compare_runs(data_dir, a, b)
+                    elif path.path == "/api/scan/list":
+                        r = {"scans": scan.list_scans(data_dir)}
+                    elif path.path == "/api/scan/read":
+                        r = scan.read_scan(data_dir, q.get("name", [""])[0])
+                    else:
+                        r = scan.compare_scans(data_dir, a, b)
+                    self._json({"ok": True, **r})
+                except Exception as e:
+                    self._json({"ok": False, "error": str(e)}, 400)
             else:
                 self._json({"error": "not found"}, 404)
 
@@ -614,7 +671,21 @@ def make_handler(m: Machine):
             data = json.loads(self.rfile.read(n) or b"{}")
             route = self.path.replace("/api/", "")
             try:
-                if route == "connect":
+                if sc.active and route in BLOCKED_DURING_SCAN:
+                    r = {"ok": False, "error": "scan in progress: stop the scan first"}
+                elif route == "scan/preview":
+                    pts, err = sc.plan(data)
+                    r = {"ok": True, "points": pts, "warning": err}
+                elif route == "scan/start":
+                    r = sc.start(data)
+                    if r.get("ok"):
+                        m.cfg["sweep"].update({k: data[k] for k in m.cfg["sweep"] if k in data})
+                        lk.cfg["scan_z_planes"] = data.get("z_planes")
+                        lk.cfg["scan_duration_s"] = data.get("duration_s")
+                        save_config(m.cfg)
+                elif route == "scan/stop":
+                    r = sc.stop()
+                elif route == "connect":
                     m.connect(data.get("port"), data.get("baud"))
                     r = {"ok": True}
                 elif route == "disconnect":
@@ -660,12 +731,49 @@ def make_handler(m: Machine):
                     r = m.pause_sweep(bool(data.get("pause", True)))
                 elif route == "sweep/stop":
                     r = m.stop_sweep()
+                elif route == "daq/connect":
+                    lk.connect(data.get("resource")); r = {"ok": True}
+                elif route == "daq/disconnect":
+                    lk.disconnect(); r = {"ok": True}
+                elif route == "daq/run/start":
+                    rate = data.get("rate_hz") or lk.cfg["rate_hz"]
+                    data_dir = data.get("data_dir") or lk.cfg["data_dir"]
+                    settle = data.get("settle_s")
+                    r = lk.start_run(data.get("duration_s"), rate, data_dir,
+                                     data.get("condition", ""), data.get("notes", ""),
+                                     data.get("run_id"), settle)
+                    if r.get("ok"):  # start_run validated these; remember them for next time
+                        lk.cfg["rate_hz"] = float(rate)
+                        lk.cfg["data_dir"] = data_dir
+                        if settle not in (None, ""):
+                            lk.cfg["settle_s"] = float(settle)
+                        save_config(m.cfg)
+                elif route == "daq/run/stop":
+                    r = lk.stop_run()
+                elif route == "daq/run/abort":
+                    r = lk.abort_run()
+                elif route == "daq/ping":
+                    r = lk.ping()
+                elif route == "daq/set":
+                    r = lk.set_control(data.get("name"), data.get("value"))
+                elif route == "daq/action":
+                    r = lk.action(data.get("name"))
+                elif route == "daq/monitor":
+                    r = lk.set_monitor(bool(data.get("on")))
+                    save_config(m.cfg)
+                elif route == "daq/config":
+                    for k, v in data.items():
+                        if k in daq.DEFAULT_DAQ_CONFIG:  # known keys only; config.json is shared with the gantry
+                            lk.cfg[k] = v
+                    save_config(m.cfg)
+                    r = {"ok": True}
                 else:
                     r = {"ok": False, "error": f"unknown route {route}"}
             except Exception as e:
                 r = {"ok": False, "error": str(e)}
             if r.get("ok") is False:
-                m._log("sys", f"refused {route}: {r.get('error')}")  # visible in the terminal pane, not just a fading toast
+                # visible in the respective terminal/log pane, not just a fading toast
+                (lk if route.startswith(("daq/", "scan/")) else m)._log("sys", f"refused {route}: {r.get('error')}")
             self._json(r)
 
     return H
@@ -684,13 +792,18 @@ def main():
             # Without this the UI loads but shows no ports and Connect fails, which looks like a hang.
             raise SystemExit(f"pyserial is not installed for {sys.executable}\n"
                              f"  fix: {sys.executable} -m pip install pyserial")
-    m = Machine(load_config(), mock=a.mock)
-    srv = ThreadingHTTPServer((a.host, a.port), make_handler(m))
+    cfg = load_config()
+    m = Machine(cfg, mock=a.mock)
+    lk = daq.Lockin(cfg["daq"], position_fn=lambda: m.pos, mock=a.mock)
+    sc = scan.Scanner(m, lk)
+    srv = ThreadingHTTPServer((a.host, a.port), make_handler(m, lk, sc))
     print(f"gantry console on http://localhost:{a.port}  ({'MOCK' if a.mock else 'serial'})")
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
+        sc.stop()
         m.disconnect()
+        lk.disconnect()
 
 
 if __name__ == "__main__":

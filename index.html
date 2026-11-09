@@ -2,216 +2,498 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Gantry Console</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AE DAQ Studio</title>
 <style>
+  /* Palette and widget styling follow RapidaQ (gui/widgets.py StyledPanel, gui/studio_ui.py). */
   :root{
-    --bg:#101214; --panel:#181b1f; --line:#2a2f36; --ink:#e7e9ec; --dim:#8b939e;
-    --acc:#2ecc8f; --warn:#f0b429; --bad:#ef5350; --x:#ff7a59; --y:#4fc3f7; --z:#b39ddb;
-    --mono: ui-monospace, "SF Mono", Menlo, monospace;
+    --bg:#2b2b2b; --panel:#2e2e2e; --border:#4a4a4a; --in:#3a3a3a; --inb:#5a5a5a; --btn:#484848; --btnh:#585858;
+    --ink:#e8e8e8; --dim:#90a4ae; --mut:#777; --title:#cce4ff; --group:#c8d8e0; --acc:#448aff;
+    --good:#69f0ae; --bad:#ff5252; --warn:#ffd740; --chip:#1e1e1e; --plot:#252525;
+    --line:#4a4a4a; --x:#ff5252; --y:#448aff; --z:#e040fb;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --sans: -apple-system, "Segoe UI", system-ui, sans-serif;
   }
   *{box-sizing:border-box}
-  body{margin:0;background:var(--bg);color:var(--ink);font:13px/1.4 -apple-system,system-ui,sans-serif}
-  header{display:flex;gap:10px;align-items:center;padding:10px 16px;border-bottom:1px solid var(--line);flex-wrap:wrap}
-  header h1{font-size:14px;letter-spacing:.08em;text-transform:uppercase;margin:0 12px 0 0;color:var(--acc)}
+  html,body{margin:0;background:var(--bg);color:var(--ink);font:12px/1.35 var(--sans)}
   .grow{flex:1}
-  main{display:grid;grid-template-columns:330px 1fr 420px;gap:12px;padding:12px;min-height:calc(100vh - 54px)}
+  .bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;background:var(--panel);border:1px solid var(--border);border-radius:6px;padding:5px 8px;margin:6px 6px 0}
+  .apptitle{font-size:13px;color:var(--title);letter-spacing:1px}
+  .apptitle span{color:var(--dim);font-weight:400;font-size:11px;letter-spacing:0;margin-left:4px}
+  .chip{color:var(--title);font-weight:700;font-size:11px;background:var(--chip);border:1px solid #3a3a3a;border-radius:4px;padding:3px 8px;max-width:330px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .health{display:flex;align-items:center;gap:6px;background:var(--chip);border:1px solid #555;border-radius:5px;padding:3px 8px}
+  .hlbl{color:var(--dim);font-size:9px;font-weight:700;letter-spacing:1px}
+  #healthTxt{color:var(--good);font-weight:700;font-size:11px;min-width:118px}
+  .hbar{width:100px;height:12px;background:#1a1a1a;border:1px solid #444;border-radius:3px;overflow:hidden}
+  .hbar i{display:block;height:100%;width:0;background:var(--good);transition:width .3s}
+  .status{font-weight:700;min-width:80px} .status.on{color:var(--good)} .status.off{color:var(--bad)} .status.busy{color:var(--warn)}
+  button{background:var(--btn);color:#fff;border:1px solid #666;border-radius:4px;padding:4px 10px;font:700 11px var(--sans);cursor:pointer;white-space:nowrap}
+  button:hover:not(:disabled){background:var(--btnh)}
+  button:disabled{background:#282828;color:#777;border-color:#383838;cursor:default}
+  button.go{background:#1b4d22;color:#e0f2e1;border-color:#2e7d32;padding:5px 12px}
+  button.go:hover:not(:disabled){background:#22652c}
+  button.go.attn:not(:disabled){box-shadow:0 0 0 2px rgba(105,240,174,.55);animation:attn 1.4s ease-in-out infinite}
+  @keyframes attn{50%{box-shadow:0 0 0 5px rgba(105,240,174,.15)}}
+  button.rec{background:#b71c1c;color:#fff;border-color:#d32f2f;min-width:112px;padding:5px 12px}
+  button.rec.on{background:#d32f2f;border-color:#ff8a80}
+  button.abort{background:#4a2a2a;border-color:#7a3a3a}
+  button.estop{background:#d32f2f;border-color:#ff5252}
+  button.apply{background:#1a3a5c;color:var(--title);border-color:#3a5070}
+  button.pri{background:#1a3a5c;color:var(--title);border-color:#3a5070}
+  button.danger{background:#d32f2f;border-color:#ff5252}
+  button.sel{background:#1565c0;border-color:var(--acc)}
+  /* after the coloured variants so a disabled button never looks clickable */
+  button.go:disabled,button.rec:disabled,button.abort:disabled,button.estop:disabled,button.apply:disabled,
+  button.pri:disabled,button.danger:disabled,button.sel:disabled{background:#282828;color:#777;border-color:#383838;box-shadow:none;animation:none}
+  .seg{display:inline-flex;gap:3px;flex-wrap:wrap}
+  .seg button,.tb{background:#2a3a4a;color:var(--title);font-size:10px;border:1px solid #3a5070;border-radius:3px;padding:2px 8px}
+  .seg button.sel{background:#1565c0;border-color:var(--acc)}
+  .seg button:hover:not(:disabled):not(.sel),.tb:hover:not(:disabled){background:#1a4a7a}
+  .tb.on{background:#1b5e20;border-color:var(--good)}
+  input,select,textarea{background:var(--in);color:#f0f0f0;border:1px solid var(--inb);border-radius:4px;padding:3px 5px;font:11px var(--mono);min-width:0}
+  input:disabled,select:disabled,textarea:disabled{color:#888;background:#303030;border-color:#444}
+  input[type=checkbox]{accent-color:var(--acc)}
+
+  /* row 2: status lights (RapidaQ "Serial Lines") */
+  .lights .light{display:flex;flex-direction:column;align-items:center;width:44px}
+  .light i{width:11px;height:11px;border-radius:50%;background:#2a2a2a;border:1px solid #3a3a3a;display:block;transition:background .15s}
+  .light span{color:var(--mut);font-size:8px;font-weight:700;letter-spacing:.5px;margin-top:1px}
+  .light.on span{color:#ccc}
+  .livehw{color:var(--good);font:11px var(--mono)}
+  #lastAlert{color:var(--warn);font-size:11px;max-width:520px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+  /* row 3: recording bar */
+  .recbar .inl{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--ink)}
+  .hms{width:74px;text-align:center}
+  .clock{color:var(--acc);font:700 13px var(--mono)}
+  .logging{color:#80cbc4;font-size:10px;max-width:420px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .err{color:var(--bad);font-size:11px}
+
+  /* tabs */
+  .tabbar{display:flex;gap:2px;margin:8px 6px 0;padding-left:2px}
+  .tab{background:#383838;color:#bbb;border:1px solid var(--border);border-bottom:none;border-radius:4px 4px 0 0;padding:6px 18px;font-size:11px}
+  .tab:hover:not(.sel){background:#444;color:#ddd}
+  .tab.sel{background:var(--panel);color:#fff;border-bottom:2px solid var(--acc)}
+  .tabpane{display:none;margin:0 6px 6px;border:1px solid var(--border);border-radius:0 4px 4px 4px;padding:6px;background:var(--bg)}
+  .tabpane.sel{display:block}
+
+  /* acquisition tab */
+  .acqgrid{display:grid;grid-template-columns:290px minmax(0,1fr) 290px;gap:6px;align-items:start}
+  @media(max-width:1280px){.acqgrid{grid-template-columns:270px minmax(0,1fr)} .acqgrid .right{grid-column:1/-1}}
+  .side{display:flex;flex-direction:column;gap:8px}
+  .sidetitle{color:var(--title);font-size:12px;font-weight:700}
+  fieldset.group{border:1px solid #555;border-radius:4px;margin:0;padding:6px 8px 8px;display:flex;flex-direction:column;gap:6px;background:var(--panel);min-width:0}
+  fieldset.group legend{color:var(--group);font-size:11px;font-weight:700;padding:0 4px}
+  .frow{display:grid;grid-template-columns:90px minmax(0,1fr);gap:6px;align-items:center}
+  .frow > span:first-child{color:var(--ink);font-size:11px}
+  .fl{display:flex;gap:4px;min-width:0;align-items:center} .fl > select,.fl > input{flex:1;min-width:0}
+  .val{font:11px var(--mono);color:var(--title);overflow-wrap:anywhere}
+  .chk{display:flex;gap:6px;align-items:center;font-size:11px;color:var(--ink);cursor:pointer}
+  .chk input{width:auto}
+  .note{color:var(--dim);font-size:10px}
+  .btnrow{display:flex;gap:4px;flex-wrap:wrap} .btnrow button{flex:1}
+  .center{display:flex;flex-direction:column;gap:3px;min-width:0}
+  .toolbar{display:flex;align-items:center;gap:6px;flex-wrap:wrap;background:#1e1e1e;border-radius:4px;padding:4px 6px}
+  .tlbl{color:var(--dim);font-size:9px;font-weight:700;letter-spacing:1px;margin-left:4px}
+  canvas{display:block;width:100%;background:var(--plot);border:1px solid #3a3a3a;border-radius:3px}
+  .chcard{background:var(--panel);border:1px solid var(--border);border-left:4px solid var(--c);border-radius:5px;padding:6px 8px;display:grid;grid-template-columns:1fr auto;gap:2px 8px}
+  .chcard .chname{font-weight:700;color:var(--c);font-size:12px}
+  .chcard .chunit{color:var(--dim);font-size:10px;align-self:center}
+  .chcard .chval{grid-column:1/-1;font:700 20px var(--mono);color:#fff;text-align:right;letter-spacing:.5px}
+  .chcard .chstats{grid-column:1/-1;font:10px var(--mono);color:var(--dim);display:grid;grid-template-columns:1fr 1fr;gap:0 8px}
+  .chcard.off{opacity:.45}
+  .mono{font-family:var(--mono)} .small{font-size:10px} .pre{white-space:pre-wrap}
+
+  /* instrument / diagnostics / logs */
+  .instgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:8px;align-items:start}
+  .diaggrid{display:grid;grid-template-columns:360px minmax(0,1fr);gap:8px;align-items:start}
+  table.kv{border-collapse:collapse;width:100%;font:11px var(--mono)}
+  table.kv td{padding:3px 4px;border-bottom:1px solid #3a3a3a}
+  table.kv td:first-child{color:var(--dim);font-family:var(--sans);width:46%}
+  #daqLog{height:min(56vh,520px);overflow:auto;background:#1e1e1e;border:1px solid #3a3a3a;border-radius:4px;padding:6px;font:11px/1.5 var(--mono);white-space:pre-wrap;color:var(--warn)}
+  #daqLog .t{color:var(--mut)}
+  .logsgrid{display:grid;grid-template-columns:360px minmax(0,1fr);gap:6px;align-items:start}
+  .hist{max-height:360px;overflow:auto;display:flex;flex-direction:column;gap:3px}
+  .hist div{display:flex;gap:4px;align-items:center;font:11px var(--mono)}
+  .hist div b{flex:1;font-weight:400;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .hist button{padding:2px 7px;font-size:10px}
+
+  /* gantry + scan tabs (layout carried over) */
+  main{display:grid;grid-template-columns:330px 1fr 420px;gap:6px;align-items:start}
   @media(max-width:1250px){main{grid-template-columns:1fr 1fr}}
-  .panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px;display:flex;flex-direction:column;gap:10px}
-  .panel h2{margin:0;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim)}
-  button{background:#232830;color:var(--ink);border:1px solid var(--line);border-radius:6px;padding:7px 10px;cursor:pointer;font:inherit}
-  button:hover{border-color:var(--dim)} button:active{transform:translateY(1px)}
-  button.pri{background:var(--acc);color:#04140d;border-color:var(--acc);font-weight:600}
-  button.danger{background:var(--bad);border-color:var(--bad);color:#fff;font-weight:700}
-  button.sel{border-color:var(--acc);color:var(--acc)}
-  button:disabled{opacity:.4;cursor:default}
-  input,select,textarea{background:#0c0e10;color:var(--ink);border:1px solid var(--line);border-radius:5px;padding:5px 7px;font:12px var(--mono);width:100%}
-  label{display:flex;flex-direction:column;gap:3px;color:var(--dim);font-size:11px}
-  .row{display:flex;gap:8px;align-items:end}
-  .row>*{flex:1}
+  .panel{background:var(--panel);border:1px solid var(--border);border-radius:6px;padding:10px;display:flex;flex-direction:column;gap:8px}
+  .panel h2{margin:0;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--group)}
+  .panel label{display:flex;flex-direction:column;gap:3px;color:var(--dim);font-size:11px}
+  .panel label.chk{flex-direction:row;color:var(--ink)}
+  .row{display:flex;gap:8px;align-items:end} .row>*{flex:1}
   .dro{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
-  .dro div{background:#0c0e10;border:1px solid var(--line);border-radius:6px;padding:8px;text-align:right;font:600 22px var(--mono)}
+  .dro div{background:#1e1e1e;border:1px solid #3a3a3a;border-radius:4px;padding:8px;text-align:right;font:600 22px var(--mono)}
   .dro span{display:block;text-align:left;font:600 11px var(--mono);letter-spacing:.1em}
   .ax-X{color:var(--x)} .ax-Y{color:var(--y)} .ax-Z{color:var(--z)}
   .pad{display:grid;grid-template-columns:repeat(3,56px) 18px 56px;grid-template-rows:repeat(3,56px);gap:6px;justify-content:center}
   .pad button{font:700 14px var(--mono);padding:0}
   .steps{display:flex;gap:4px} .steps button{flex:1;padding:5px 0;font:12px var(--mono)}
-  .pill{font:11px var(--mono);padding:3px 8px;border-radius:99px;border:1px solid var(--line);color:var(--dim)}
-  .pill.ok{color:var(--acc);border-color:var(--acc)} .pill.warn{color:var(--warn);border-color:var(--warn)} .pill.bad{color:var(--bad);border-color:var(--bad)}
-  #log{flex:1;min-height:200px;max-height:42vh;overflow:auto;background:#0c0e10;border:1px solid var(--line);border-radius:6px;padding:6px;font:11px/1.5 var(--mono);white-space:pre-wrap}
+  .pill{font:11px var(--mono);padding:3px 8px;border-radius:99px;border:1px solid #555;color:var(--dim)}
+  .pill.ok{color:var(--good);border-color:var(--good)} .pill.warn{color:var(--warn);border-color:var(--warn)} .pill.bad{color:var(--bad);border-color:var(--bad)}
+  #log{flex:1;min-height:200px;max-height:42vh;overflow:auto;background:#1e1e1e;border:1px solid #3a3a3a;border-radius:4px;padding:6px;font:11px/1.5 var(--mono);white-space:pre-wrap}
   .tx{color:var(--y)} .rx{color:var(--dim)} .sys{color:var(--warn)}
-  canvas{width:100%;background:#0c0e10;border:1px solid var(--line);border-radius:6px}
-  .bar{height:8px;background:#0c0e10;border-radius:4px;overflow:hidden;border:1px solid var(--line)}
-  .bar i{display:block;height:100%;background:var(--acc);width:0}
+  .prog{height:8px;background:#1a1a1a;border-radius:4px;overflow:hidden;border:1px solid #444}
+  .prog i{display:block;height:100%;background:var(--good);width:0}
   .pts{max-height:150px;overflow:auto;display:flex;flex-direction:column;gap:4px}
   .pts div{display:flex;gap:6px;align-items:center;font:11px var(--mono)} .pts div b{flex:1;font-weight:400}
   .pts button{padding:3px 7px;font-size:11px}
-  .note{font-size:11px;color:var(--dim)} .err{color:var(--bad);font-size:12px;min-height:16px}
   details summary{cursor:pointer;color:var(--dim);font-size:11px;text-transform:uppercase;letter-spacing:.1em}
   .grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px} .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
-  .chk{flex-direction:row;align-items:center;gap:6px} .chk input{width:auto}
-  .restore{display:flex;flex-direction:column;gap:6px;border:1px solid var(--warn);border-radius:6px;padding:8px}
+  .restore{display:flex;flex-direction:column;gap:6px;border:1px solid var(--warn);border-radius:4px;padding:8px}
   .restore[hidden]{display:none}
+  .daqgrid{display:grid;grid-template-columns:260px 1fr 280px;gap:8px}
+  @media(max-width:1250px){.daqgrid{grid-template-columns:1fr 1fr}}
+  .col{display:flex;flex-direction:column;gap:8px}
 </style>
 </head>
 <body>
-<header>
-  <h1>Gantry Console</h1>
-  <select id="port" style="width:230px"></select>
-  <input id="baud" value="250000" style="width:90px">
-  <button id="connBtn" class="pri">Connect</button>
-  <span id="connPill" class="pill">offline</span>
-  <span id="refPill" class="pill warn">not referenced</span>
-  <span id="busyPill" class="pill">idle</span>
+
+<!-- ── Row 1: always-visible hardware bar ─────────────────────────────── -->
+<div class="bar">
+  <b class="apptitle">AE DAQ Studio<span>v1.0 · SR860 lock-in</span></b>
   <span class="grow"></span>
-  <button class="danger" id="estop" title="M112. Marlin 1.1 processes it after the current command; the power switch is the real e-stop.">E-STOP (M112)</button>
-</header>
+  <span class="chip" id="chipDevice">Device: SR860</span>
+  <span class="chip" id="chipPort">Port: —</span>
+  <span class="chip" id="chipRate">Rate: — Hz</span>
+  <div class="health" title="USB query round trip and errors">
+    <span class="hlbl">LINK HEALTH</span><span id="healthTxt">Offline</span><div class="hbar"><i id="healthBar"></i></div>
+  </div>
+  <span id="linkStatus" class="status off">● Offline</span>
+  <button id="daqConnBtn" class="go" title="Open the USB-TMC session to the selected SR860">▶ Connect</button>
+  <button id="daqDiscBtn" title="Close the SR860 session">■ Disconnect</button>
+  <button class="estop" id="estop" hidden title="Gantry M112. Marlin processes it after the current command; the power switch is the real e-stop.">E-STOP</button>
+</div>
 
-<main>
-  <!-- ============ JOG ============ -->
-  <section class="panel">
-    <h2>Position</h2>
-    <div class="dro">
-      <div><span class="ax-X">X</span><b id="dX">—</b></div>
-      <div><span class="ax-Y">Y</span><b id="dY">—</b></div>
-      <div><span class="ax-Z">Z</span><b id="dZ">—</b></div>
-    </div>
+<!-- ── Row 2: status lights ──────────────────────────────────────────── -->
+<div class="bar lights">
+  <b class="small">Status:</b>
+  <div class="light" data-light="link" title="USB-TMC session open"><i></i><span>LINK</span></div>
+  <div class="light" data-light="live" title="Live view: polling, nothing saved"><i></i><span>LIVE</span></div>
+  <div class="light" data-light="rec" title="Recording to disk"><i></i><span>REC</span></div>
+  <div class="light" data-light="settle" title="Settling before a run"><i></i><span>SETTLE</span></div>
+  <div class="light" data-light="ovld" title="Latest sample overloaded"><i></i><span>OVLD</span></div>
+  <div class="light" data-light="err" title="Failed reads in this run / link error"><i></i><span>ERR</span></div>
+  <div class="light" data-light="scan" title="XYZ scan running"><i></i><span>SCAN</span></div>
+  <div class="light" data-light="gantry" title="Gantry connected"><i></i><span>GANTRY</span></div>
+  <span id="lastAlert"></span>
+  <span class="grow"></span>
+  <span id="liveHw" class="livehw"></span>
+</div>
 
-    <h2>Jog</h2>
-    <div class="steps" id="steps"></div>
-    <div class="pad">
-      <span></span><button data-j="Y+" class="ax-Y">Y+</button><span></span><span></span><button data-j="Z+" class="ax-Z">Z+</button>
-      <button data-j="X-" class="ax-X">X−</button><button id="m114" title="Refresh position (M114)">⟳</button><button data-j="X+" class="ax-X">X+</button><span></span><span></span>
-      <span></span><button data-j="Y-" class="ax-Y">Y−</button><span></span><span></span><button data-j="Z-" class="ax-Z">Z−</button>
-    </div>
-    <div class="err" id="jogErr"></div>
-    <div class="note">Keys: ←→ X · ↑↓ Y · PgUp/PgDn Z · [ ] change step · H go home</div>
-    <div class="grid2">
-      <label>XY feed mm/min<input id="fXY" type="number"></label>
-      <label>Z feed mm/min<input id="fZ" type="number"></label>
-    </div>
+<!-- ── Row 3: recording bar ──────────────────────────────────────────── -->
+<div class="bar recbar">
+  <button id="daqRecBtn" class="rec" title="Start a timed run (CSV + JSON); press again to stop">● Record</button>
+  <button id="daqAbortBtn" class="abort" title="End now and mark the run aborted (data already written is kept)">Abort</button>
+  <label class="inl">Limit <input id="daqDuration" class="hms" value="00:01:00" title="HH:MM:SS (or seconds). Blank or 00:00:00 = until stopped"></label>
+  <label class="inl">Settle <input id="daqSettle" type="number" min="0" step="0.1" value="0" style="width:52px"> s</label>
+  <span class="inl">Rate <span class="seg" id="daqRateSteps"></span></span>
+  <span class="inl">Elapsed: <b id="recClock" class="clock">00:00:00 / 00:01:00</b></span>
+  <span id="recLogging" class="logging">Logging: CSV · JSON metadata</span>
+  <span class="grow"></span>
+  <span id="daqErr" class="err"></span>
+</div>
 
-    <h2>Work zero</h2>
-    <div class="grid3">
-      <button data-zero="XYZ" class="pri">Zero XYZ</button>
-      <button data-zero="XY">Zero XY</button>
-      <button data-zero="Z">Zero Z</button>
-    </div>
-    <div class="note">No endstops are fitted: jog to a reference corner and zero there.</div>
-    <div id="restoreBox" class="restore" hidden>
-      <span class="note">Board was reset by the reconnect. If nothing moved by hand, restore the last position so saved points and home still line up:</span>
-      <button id="restoreBtn" class="pri"></button>
-    </div>
-    <div class="grid2">
-      <button id="gotoZero">Go to 0,0</button>
-      <button id="motorsOff">Motors off (M84)</button>
-    </div>
+<div class="tabbar">
+  <button class="tab" data-tab="acq">Acquisition</button>
+  <button class="tab" data-tab="inst">Instrument</button>
+  <button class="tab" data-tab="diag">Diagnostics</button>
+  <button class="tab" data-tab="logs">Log Analysis</button>
+  <button class="tab" data-tab="scan">XYZ Scan</button>
+  <button class="tab" data-tab="gantry">Gantry</button>
+</div>
 
-    <h2>Home</h2>
-    <div class="grid2">
-      <button id="goHome" class="pri" title="Lifts Z first, then XY, then lowers (key: H)">⌂ Go home</button>
-      <button id="setHome">Set home here</button>
-    </div>
-    <div class="note" id="homeInfo">no home saved</div>
-
-    <h2>Saved positions</h2>
-    <div class="row"><input id="ptName" placeholder="name"><button id="savePt" style="flex:0 0 auto">Save current</button></div>
-    <div class="pts" id="pts"></div>
-
-    <h2>Go to</h2>
-    <div class="grid3">
-      <label>X<input id="gX" type="number" step="0.1"></label>
-      <label>Y<input id="gY" type="number" step="0.1"></label>
-      <label>Z<input id="gZ" type="number" step="0.1"></label>
-    </div>
-    <button id="gotoBtn">Move</button>
-  </section>
-
-  <!-- ============ SWEEP ============ -->
-  <section class="panel">
-    <h2>Grid sweep</h2>
-    <div class="grid3">
-      <label>X start<input data-s="x0" type="number" step="0.1"></label>
-      <label>X end<input data-s="x1" type="number" step="0.1"></label>
-      <label>X points<input data-s="nx" type="number" min="1"></label>
-      <label>Y start<input data-s="y0" type="number" step="0.1"></label>
-      <label>Y end<input data-s="y1" type="number" step="0.1"></label>
-      <label>Y points<input data-s="ny" type="number" min="1"></label>
-    </div>
-    <div class="row">
-      <button id="fromCorner0" title="Use current X/Y as start corner">Start ← here</button>
-      <button id="fromCorner1" title="Use current X/Y as end corner">End ← here</button>
-      <span class="note" id="spacing"></span>
-    </div>
-    <div class="grid3">
-      <label>Pattern
-        <select data-s="pattern">
-          <option value="serpentine_x">Serpentine, rows along X</option>
-          <option value="serpentine_y">Serpentine, columns along Y</option>
-          <option value="raster_x">Raster, rows along X</option>
-          <option value="raster_y">Raster, columns along Y</option>
-        </select></label>
-      <label>Sweep Z<input data-s="z" type="number" step="0.1"></label>
-      <label>Dwell per point (ms)<input data-s="dwell_ms" type="number" min="0"></label>
-      <label class="chk"><input data-s="lift" type="checkbox"> Lift between points</label>
-      <label>Safe Z<input data-s="safe_z" type="number" step="0.1"></label>
-      <label>Passes<input data-s="passes" type="number" min="1"></label>
-      <label class="chk"><input data-s="return_home" type="checkbox"> Return to start at end</label>
-      <label>Start at point #<input data-s="start_index" type="number" min="0"></label>
-    </div>
-    <label>G-code at each point (after arrival + dwell). Placeholders: {i} {row} {col} {x} {y} {z}
-      <textarea data-s="per_point_gcode" rows="2" placeholder="e.g.  M118 POINT {i} {x} {y}   or   M42 P6 S255&#10;G4 P50&#10;M42 P6 S0"></textarea></label>
-
-    <canvas id="cv" width="900" height="520"></canvas>
-    <div class="note" id="sweepInfo"></div>
-    <div class="bar"><i id="prog"></i></div>
-    <div class="row">
-      <button class="pri" id="runBtn">Run sweep</button>
-      <button id="pauseBtn">Pause</button>
-      <button id="stopBtn">Stop</button>
-      <button id="exportBtn">Export .gcode</button>
-    </div>
-    <div class="err" id="sweepErr"></div>
-  </section>
-
-  <!-- ============ RIGHT COLUMN ============ -->
-  <section class="panel">
-    <h2>Terminal</h2>
-    <div id="log"></div>
-    <div class="row"><input id="cmd" placeholder="G-code, Enter to send (↑ history)"><button id="sendBtn" style="flex:0 0 auto">Send</button></div>
-    <div class="row">
-      <button data-q="M114">M114 pos</button><button data-q="M119">M119 endstops</button><button data-q="M503">M503 settings</button>
+<!-- ══ Tab: Acquisition ══════════════════════════════════════════════ -->
+<div class="tabpane" id="tab-acq">
+  <div class="acqgrid">
+    <div class="side">
+      <div class="sidetitle">Acquisition Controls</div>
+      <fieldset class="group"><legend>Device Settings</legend>
+        <div class="frow"><span>Instrument</span><div class="fl"><select id="daqResource"></select><button id="daqResRefresh" title="Re-scan VISA resources">↻</button></div></div>
+        <div class="frow"><span>Identity</span><span id="daqIdentity" class="val">not connected</span></div>
+        <div class="frow"><span>Latency</span><div class="fl"><span id="daqLatency" class="val" style="flex:1">—</span><button id="daqPingBtn" title="One *IDN? round trip: checks the link and measures latency">Ping</button></div></div>
+        <label class="chk"><input type="checkbox" id="daqLive" checked> Live view when not recording (nothing saved)</label>
+      </fieldset>
+      <fieldset class="group"><legend>Run Settings</legend>
+        <div class="frow"><span>Condition</span><select id="daqCondition"><option value="">(none)</option><option>unblocked</option><option>blocked</option><option>control</option></select></div>
+        <div class="frow"><span>Run ID</span><input id="daqRunId" placeholder="auto: RunHHMMSS"></div>
+        <div class="frow"><span>Notes</span><input id="daqNotes" placeholder="operator notes"></div>
+        <div class="frow"><span>Save folder</span><input id="daqDataDir" value="runs"></div>
+        <div class="note">Each run writes AE_…csv (one row per sample, flushed as taken) and a .json with the instrument settings and summary.</div>
+      </fieldset>
+      <fieldset class="group"><legend>Lock-in Quick Settings</legend>
+        <div id="quickCtl"></div>
+        <div class="btnrow"><button data-action="auto_phase">Auto phase</button><button data-action="auto_range">Auto range</button><button data-action="auto_scale">Auto scale</button></div>
+        <div class="note">Everything else is on the Instrument tab. Settings are locked while recording.</div>
+      </fieldset>
     </div>
 
-    <details>
-      <summary>Machine settings</summary>
-      <div style="display:flex;flex-direction:column;gap:8px;margin-top:8px">
-        <label class="chk"><input id="enfLim" type="checkbox"> Enforce console soft limits (firmware has none)</label>
-        <div class="grid3">
-          <label>X min<input data-lim="X0" type="number"></label><label>Y min<input data-lim="Y0" type="number"></label><label>Z min<input data-lim="Z0" type="number"></label>
-          <label>X max<input data-lim="X1" type="number"></label><label>Y max<input data-lim="Y1" type="number"></label><label>Z max<input data-lim="Z1" type="number"></label>
-        </div>
-        <div class="grid3">
-          <label>X steps/mm<input data-spm="X" type="number" step="0.01"></label>
-          <label>Y steps/mm<input data-spm="Y" type="number" step="0.01"></label>
-          <label>Z steps/mm<input data-spm="Z" type="number" step="0.01"></label>
-        </div>
-        <label class="chk"><input id="sendSpm" type="checkbox"> Send M92 steps/mm on connect</label>
-        <div class="row"><button id="saveCfg" class="pri">Save settings</button><button id="applySpm">Apply M92 now</button></div>
-        <h2>Steps/mm calibration</h2>
-        <div class="grid3">
-          <label>Axis<select id="calAx"><option>X</option><option>Y</option><option>Z</option></select></label>
-          <label>Commanded mm<input id="calCmd" type="number" value="50"></label>
-          <label>Measured mm<input id="calMeas" type="number"></label>
-        </div>
-        <button id="calBtn">Compute new steps/mm</button>
-        <div class="note" id="calOut"></div>
+    <div class="center">
+      <div class="toolbar">
+        <b class="tlbl">LIVE WINDOW</b><span class="seg" id="winBtns"></span>
+        <b class="tlbl">Y</b><span class="seg" id="yBtns"></span>
+        <b class="tlbl">VIEW</b><span class="seg" id="viewBtns"></span>
+        <button id="livePause" class="tb" title="Freeze the display (acquisition continues)">❚❚ Pause</button>
+        <span class="grow"></span>
+        <button id="daqPng" class="tb">PNG</button>
       </div>
-    </details>
-  </section>
-</main>
+      <canvas id="daqCv"></canvas>
+      <div class="note">Hover the plot for exact values. Red ticks along the bottom mark overloaded samples. Y: Auto fits the data, ± is symmetric about zero, FS uses the sensitivity (full scale).</div>
+    </div>
+
+    <div class="side right">
+      <div class="sidetitle">Channel Values <span class="note" id="chanWin"></span></div>
+      <div id="chanCards" class="side" style="gap:6px"></div>
+      <fieldset class="group"><legend>Run</legend>
+        <div id="daqRunInfo" class="mono small pre">no run yet</div>
+        <div id="daqSummary" class="mono small pre"></div>
+      </fieldset>
+    </div>
+  </div>
+</div>
+
+<!-- ══ Tab: Instrument ══════════════════════════════════════════════ -->
+<div class="tabpane" id="tab-inst">
+  <div class="toolbar" style="margin-bottom:6px">
+    <b class="sidetitle">SR860 Settings</b>
+    <button id="instRefresh" class="tb">↻ Read from instrument</button>
+    <span class="note" id="instInfo"></span>
+    <span class="grow"></span>
+    <span class="note">Every change is read back from the SR860 to confirm it and logged on the Diagnostics tab. Locked while recording or scanning.</span>
+  </div>
+  <div class="instgrid" id="instGroups"></div>
+</div>
+
+<!-- ══ Tab: Diagnostics ═════════════════════════════════════════════ -->
+<div class="tabpane" id="tab-diag">
+  <div class="diaggrid">
+    <div class="side">
+      <fieldset class="group"><legend>Live Statistics</legend><table class="kv" id="diagStats"></table></fieldset>
+      <fieldset class="group"><legend>Link</legend><table class="kv" id="diagLink"></table></fieldset>
+    </div>
+    <fieldset class="group"><legend>SR860 Alerts &amp; Event Log</legend><div id="daqLog"></div></fieldset>
+  </div>
+</div>
+
+<!-- ══ Tab: Log Analysis ════════════════════════════════════════════ -->
+<div class="tabpane" id="tab-logs">
+  <div class="logsgrid">
+    <div class="side">
+      <fieldset class="group"><legend>Recorded Runs</legend>
+        <div class="btnrow"><button id="daqHistRefresh">↻ Refresh</button><button id="daqSumCsv" title="One row per run: position, condition, stats">Summary CSV</button></div>
+        <div class="hist" id="daqHist"></div>
+        <button id="daqCmpBtn" class="apply" disabled title="Complex difference A − B of the mean X/Y, with both runs overlaid">Compare A − B</button>
+        <div class="note">Open a run to plot it. Mark one A and one B to compare: ΔX, ΔY of the means and |Δ| = √(ΔX²+ΔY²), not R<sub>A</sub> − R<sub>B</sub>.</div>
+      </fieldset>
+      <fieldset class="group"><legend>Run Details</legend><div class="mono small pre" id="daqHistInfo">no run open</div></fieldset>
+    </div>
+    <div class="center">
+      <div class="toolbar">
+        <b class="tlbl">Y</b><span class="seg" id="hyBtns"></span>
+        <b class="tlbl">VIEW</b><span class="seg" id="hviewBtns"></span>
+        <span class="grow"></span>
+        <button id="histPng" class="tb">PNG</button>
+      </div>
+      <canvas id="histCv"></canvas>
+    </div>
+  </div>
+</div>
+
+<!-- ══ Tab: XYZ Scan ════════════════════════════════════════════════ -->
+<div class="tabpane" id="tab-scan">
+  <div class="daqgrid">
+    <div class="col">
+      <div class="note">XY grid, pattern, lift and safe Z come from the Gantry tab's Grid sweep; rate, settle, condition, notes and save folder from the recording bar and Acquisition tab. At each point: move → M400 → M114 check → settle → timed run.</div>
+      <label class="note">Z planes, mm (comma-separated; blank = sweep Z)<input id="scZ" placeholder="e.g. 10, 12, 14" style="width:100%"></label>
+      <label class="note">Per-point duration (s)<input id="scDur" type="number" min="0.1" step="0.1" value="5" style="width:100%"></label>
+      <label class="note">Start at point #<input id="scStartIdx" type="number" min="0" value="0" style="width:100%"></label>
+      <div class="note" id="scPlan"></div>
+      <div class="btnrow">
+        <button id="scStart" class="apply">Start scan</button>
+        <button id="scStop">Stop scan</button>
+      </div>
+      <div class="prog"><i id="scProg"></i></div>
+      <div class="note" id="scInfo"></div>
+      <div class="err" id="scErr"></div>
+    </div>
+    <div class="col">
+      <canvas id="hmCv"></canvas>
+      <div class="toolbar">
+        <b class="tlbl">METRIC</b><select id="hmMetric"></select>
+        <b class="tlbl">Z PLANE</b><select id="hmPlane"></select>
+        <span class="grow"></span>
+        <button id="hmPng" class="tb">PNG</button>
+        <button id="hmCsv" class="tb">CSV</button>
+      </div>
+      <div class="note" id="hmInfo">open a scan from the list</div>
+    </div>
+    <div class="col">
+      <fieldset class="group"><legend>Scans</legend>
+        <div class="btnrow"><button id="scRefresh">↻ Refresh</button></div>
+        <div class="hist" id="scList"></div>
+        <button id="scCmpBtn" class="apply" disabled title="Point-by-point complex difference A − B (e.g. A unblocked, B blocked)">Compare A − B → heatmap</button>
+        <div class="note">A − B uses ΔX, ΔY of the per-point means and |Δ| = √(ΔX²+ΔY²), not R<sub>A</sub> − R<sub>B</sub>. The result is also saved as COMPARE_*.csv in the save folder.</div>
+      </fieldset>
+    </div>
+  </div>
+</div>
+
+<!-- ══ Tab: Gantry ══════════════════════════════════════════════════ -->
+<div class="tabpane" id="tab-gantry">
+  <div class="toolbar" style="margin-bottom:6px">
+    <b class="sidetitle">Gantry (Marlin over USB serial)</b>
+    <select id="port" style="width:230px"></select>
+    <input id="baud" value="250000" style="width:80px">
+    <button id="connBtn" class="go">▶ Connect</button>
+    <span id="connPill" class="pill">offline</span>
+    <span id="refPill" class="pill warn">not referenced</span>
+    <span id="busyPill" class="pill">idle</span>
+    <span class="grow"></span>
+    <span class="note">Arrow keys jog only while this tab is open.</span>
+  </div>
+  <main>
+    <section class="panel">
+      <h2>Position</h2>
+      <div class="dro">
+        <div><span class="ax-X">X</span><b id="dX">—</b></div>
+        <div><span class="ax-Y">Y</span><b id="dY">—</b></div>
+        <div><span class="ax-Z">Z</span><b id="dZ">—</b></div>
+      </div>
+      <h2>Jog</h2>
+      <div class="steps" id="steps"></div>
+      <div class="pad">
+        <span></span><button data-j="Y+" class="ax-Y">Y+</button><span></span><span></span><button data-j="Z+" class="ax-Z">Z+</button>
+        <button data-j="X-" class="ax-X">X−</button><button id="m114" title="Refresh position (M114)">⟳</button><button data-j="X+" class="ax-X">X+</button><span></span><span></span>
+        <span></span><button data-j="Y-" class="ax-Y">Y−</button><span></span><span></span><button data-j="Z-" class="ax-Z">Z−</button>
+      </div>
+      <div class="err" id="jogErr"></div>
+      <div class="note">Keys: ←→ X · ↑↓ Y · PgUp/PgDn Z · [ ] change step · H go home</div>
+      <div class="grid2">
+        <label>XY feed mm/min<input id="fXY" type="number"></label>
+        <label>Z feed mm/min<input id="fZ" type="number"></label>
+      </div>
+      <h2>Work zero</h2>
+      <div class="grid3">
+        <button data-zero="XYZ" class="pri">Zero XYZ</button>
+        <button data-zero="XY">Zero XY</button>
+        <button data-zero="Z">Zero Z</button>
+      </div>
+      <div class="note">No endstops are fitted: jog to a reference corner and zero there.</div>
+      <div id="restoreBox" class="restore" hidden>
+        <span class="note">Board was reset by the reconnect. If nothing moved by hand, restore the last position so saved points and home still line up:</span>
+        <button id="restoreBtn" class="pri"></button>
+      </div>
+      <div class="grid2">
+        <button id="gotoZero">Go to 0,0</button>
+        <button id="motorsOff">Motors off (M84)</button>
+      </div>
+      <h2>Home</h2>
+      <div class="grid2">
+        <button id="goHome" class="pri" title="Lifts Z first, then XY, then lowers (key: H)">⌂ Go home</button>
+        <button id="setHome">Set home here</button>
+      </div>
+      <div class="note" id="homeInfo">no home saved</div>
+      <h2>Saved positions</h2>
+      <div class="row"><input id="ptName" placeholder="name"><button id="savePt" style="flex:0 0 auto">Save current</button></div>
+      <div class="pts" id="pts"></div>
+      <h2>Go to</h2>
+      <div class="grid3">
+        <label>X<input id="gX" type="number" step="0.1"></label>
+        <label>Y<input id="gY" type="number" step="0.1"></label>
+        <label>Z<input id="gZ" type="number" step="0.1"></label>
+      </div>
+      <button id="gotoBtn">Move</button>
+    </section>
+
+    <section class="panel">
+      <h2>Grid sweep</h2>
+      <div class="grid3">
+        <label>X start<input data-s="x0" type="number" step="0.1"></label>
+        <label>X end<input data-s="x1" type="number" step="0.1"></label>
+        <label>X points<input data-s="nx" type="number" min="1"></label>
+        <label>Y start<input data-s="y0" type="number" step="0.1"></label>
+        <label>Y end<input data-s="y1" type="number" step="0.1"></label>
+        <label>Y points<input data-s="ny" type="number" min="1"></label>
+      </div>
+      <div class="row">
+        <button id="fromCorner0" title="Use current X/Y as start corner">Start ← here</button>
+        <button id="fromCorner1" title="Use current X/Y as end corner">End ← here</button>
+        <span class="note" id="spacing"></span>
+      </div>
+      <div class="grid3">
+        <label>Pattern
+          <select data-s="pattern">
+            <option value="serpentine_x">Serpentine, rows along X</option>
+            <option value="serpentine_y">Serpentine, columns along Y</option>
+            <option value="raster_x">Raster, rows along X</option>
+            <option value="raster_y">Raster, columns along Y</option>
+          </select></label>
+        <label>Sweep Z<input data-s="z" type="number" step="0.1"></label>
+        <label>Dwell per point (ms)<input data-s="dwell_ms" type="number" min="0"></label>
+        <label class="chk"><input data-s="lift" type="checkbox"> Lift between points</label>
+        <label>Safe Z<input data-s="safe_z" type="number" step="0.1"></label>
+        <label>Passes<input data-s="passes" type="number" min="1"></label>
+        <label class="chk"><input data-s="return_home" type="checkbox"> Return to start at end</label>
+        <label>Start at point #<input data-s="start_index" type="number" min="0"></label>
+      </div>
+      <label>G-code at each point (after arrival + dwell). Placeholders: {i} {row} {col} {x} {y} {z}
+        <textarea data-s="per_point_gcode" rows="2" placeholder="e.g.  M118 POINT {i} {x} {y}   or   M42 P6 S255&#10;G4 P50&#10;M42 P6 S0"></textarea></label>
+      <canvas id="cv" width="900" height="520"></canvas>
+      <div class="note" id="sweepInfo"></div>
+      <div class="prog"><i id="prog"></i></div>
+      <div class="row">
+        <button class="pri" id="runBtn">Run sweep</button>
+        <button id="pauseBtn">Pause</button>
+        <button id="stopBtn">Stop</button>
+        <button id="exportBtn">Export .gcode</button>
+      </div>
+      <div class="err" id="sweepErr"></div>
+    </section>
+
+    <section class="panel">
+      <h2>Terminal</h2>
+      <div id="log"></div>
+      <div class="row"><input id="cmd" placeholder="G-code, Enter to send (↑ history)"><button id="sendBtn" style="flex:0 0 auto">Send</button></div>
+      <div class="row">
+        <button data-q="M114">M114 pos</button><button data-q="M119">M119 endstops</button><button data-q="M503">M503 settings</button>
+      </div>
+      <details>
+        <summary>Machine settings</summary>
+        <div style="display:flex;flex-direction:column;gap:8px;margin-top:8px">
+          <label class="chk"><input id="enfLim" type="checkbox"> Enforce console soft limits (firmware has none)</label>
+          <div class="grid3">
+            <label>X min<input data-lim="X0" type="number"></label><label>Y min<input data-lim="Y0" type="number"></label><label>Z min<input data-lim="Z0" type="number"></label>
+            <label>X max<input data-lim="X1" type="number"></label><label>Y max<input data-lim="Y1" type="number"></label><label>Z max<input data-lim="Z1" type="number"></label>
+          </div>
+          <div class="grid3">
+            <label>X steps/mm<input data-spm="X" type="number" step="0.01"></label>
+            <label>Y steps/mm<input data-spm="Y" type="number" step="0.01"></label>
+            <label>Z steps/mm<input data-spm="Z" type="number" step="0.01"></label>
+          </div>
+          <label class="chk"><input id="sendSpm" type="checkbox"> Send M92 steps/mm on connect</label>
+          <div class="row"><button id="saveCfg" class="pri">Save settings</button><button id="applySpm">Apply M92 now</button></div>
+          <h2>Steps/mm calibration</h2>
+          <div class="grid3">
+            <label>Axis<select id="calAx"><option>X</option><option>Y</option><option>Z</option></select></label>
+            <label>Commanded mm<input id="calCmd" type="number" value="50"></label>
+            <label>Measured mm<input id="calMeas" type="number"></label>
+          </div>
+          <button id="calBtn">Compute new steps/mm</button>
+          <div class="note" id="calOut"></div>
+        </div>
+      </details>
+    </section>
+  </main>
+</div>
 
 <script>
 const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
+const MONO = 'ui-monospace,"SF Mono",Menlo,Consolas,monospace', SANS = '-apple-system,"Segoe UI",system-ui,sans-serif';
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]));
 const STEPS = [0.01, 0.1, 1, 5, 10, 50];
 let step = 1, S = null, logSeq = 0, cfgLoaded = false, preview = [], hist = [], histI = 0;
 
@@ -219,14 +501,31 @@ async function api(path, body){
   const r = await fetch('/api/' + path, body === undefined ? {} : {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
   return r.json();
 }
-function err(id, msg){ $(id).textContent = msg || ''; if (msg) setTimeout(() => { if ($(id).textContent === msg) $(id).textContent = ''; }, 6000); }
+function err(id, msg){ $(id).textContent = msg || ''; if (msg) setTimeout(() => { if ($(id).textContent === msg) $(id).textContent = ''; }, 8000); }
 async function act(path, body, errId='#jogErr'){ const r = await api(path, body); if (r && r.ok === false) err(errId, r.error); return r; }
 
-// ---------- connection ----------
+// ═════════════ tabs ═════════════
+let activeTab = 'acq';
+function setTab(t){
+  activeTab = t;
+  $$('.tab').forEach(b => b.classList.toggle('sel', b.dataset.tab === t));
+  $$('.tabpane').forEach(p => p.classList.toggle('sel', p.id === 'tab-' + t));
+  try { localStorage.setItem('tab', t); history.replaceState(null, '', '#tab=' + t); } catch(e){}
+  if (t === 'inst') loadSettings();
+  if (t === 'logs') loadDaqHistory();
+  if (t === 'scan') loadScans();
+  if (t === 'gantry') schedulePreview();
+  redrawAll();
+}
+$$('.tab').forEach(b => b.onclick = () => setTab(b.dataset.tab));
+function redrawAll(){ drawLive(); drawHist(); drawHeatmap(); draw(); renderChannels(); renderDiag(); }
+window.addEventListener('resize', () => redrawAll());
+
+// ═════════════ gantry (unchanged logic) ═════════════
 async function loadPorts(){
   const {ports} = await api('ports');
   const sel = $('#port'); const cur = S?.cfg?.port;
-  sel.innerHTML = ports.map(p => `<option ${p===cur?'selected':''}>${p}</option>`).join('') || '<option>(no ports)</option>';
+  sel.innerHTML = ports.map(p => `<option ${p===cur?'selected':''}>${esc(p)}</option>`).join('') || '<option>(no ports)</option>';
 }
 $('#connBtn').onclick = async () => {
   if (S?.connected) return act('disconnect', {});
@@ -236,7 +535,6 @@ $('#connBtn').onclick = async () => {
 };
 $('#estop').onclick = () => act('estop', {});
 
-// ---------- jog ----------
 $('#steps').innerHTML = STEPS.map(s => `<button data-step="${s}">${s}</button>`).join('');
 function setStep(s){ step = s; $$('[data-step]').forEach(b => b.classList.toggle('sel', +b.dataset.step === s)); }
 $$('[data-step]').forEach(b => b.onclick = () => setStep(+b.dataset.step)); setStep(1);
@@ -247,6 +545,8 @@ function jog(ax, dir){
 $$('[data-j]').forEach(b => b.onclick = () => jog(b.dataset.j[0], b.dataset.j[1] === '+' ? 1 : -1));
 $('#m114').onclick = () => act('send', {gcode:'M114'});
 document.addEventListener('keydown', e => {
+  // Jog keys act only on the Gantry tab: arrow keys pressed elsewhere must never move the stage.
+  if (activeTab !== 'gantry') return;
   if (['INPUT','TEXTAREA','SELECT'].includes(document.activeElement.tagName)) return;
   const k = {ArrowLeft:['X',-1], ArrowRight:['X',1], ArrowUp:['Y',1], ArrowDown:['Y',-1], PageUp:['Z',1], PageDown:['Z',-1]}[e.key];
   if (k){ e.preventDefault(); if (!e.repeat) jog(...k); return; }  // ignore auto-repeat so a held key can't queue a runaway move
@@ -262,7 +562,6 @@ const num = id => $(id).value === '' ? null : +$(id).value;
 $('#gotoBtn').onclick = () => act('goto', {x:num('#gX'), y:num('#gY'), z:num('#gZ')});
 ['#fXY','#fZ'].forEach(id => $(id).onchange = () => api('config', {feed:{XY:+$('#fXY').value, Z:+$('#fZ').value}}));
 
-// ---------- home + saved positions ----------
 const fmtP = p => `<span class="ax-X">${p.x.toFixed(2)}</span> <span class="ax-Y">${p.y.toFixed(2)}</span> <span class="ax-Z">${p.z.toFixed(2)}</span>`;
 const isHome = p => { const h = S.cfg.home; return h && h.x === p.x && h.y === p.y && h.z === p.z; };
 function renderHome(){
@@ -273,18 +572,16 @@ function renderHome(){
 async function setHomeTo(h){ await api('config', {home: h}); S.cfg.home = h; renderHome(); renderPts(); }
 function renderPts(){
   const pts = S.cfg.saved_points || [];
-  $('#pts').innerHTML = pts.map((p,i) => `<div><b>${isHome(p) ? '⌂ ' : ''}${p.name}  ${fmtP(p)}</b>
+  $('#pts').innerHTML = pts.map((p,i) => `<div><b>${isHome(p) ? '⌂ ' : ''}${esc(p.name)}  ${fmtP(p)}</b>
     <button data-go="${i}" title="Lift, travel, lower">Go</button>
     <button data-home="${i}" title="Make this the home point">⌂</button>
     <button data-del="${i}">✕</button></div>`).join('') || '<span class="note">none yet</span>';
-  // Same lift-travel-lower move as Go home, so a saved point never drags across the work.
   $$('[data-go]').forEach(b => b.onclick = () => { const p = pts[+b.dataset.go]; act('goto_safe', {x:p.x, y:p.y, z:p.z}); });
   $$('[data-home]').forEach(b => b.onclick = () => { const p = pts[+b.dataset.home]; setHomeTo({x:p.x, y:p.y, z:p.z}); });
   $$('[data-del]').forEach(b => b.onclick = () => { pts.splice(+b.dataset.del, 1); api('config', {saved_points: pts}); renderPts(); });
 }
 $('#savePt').onclick = () => {
   const p = S.pos; if (p.X === null) return err('#jogErr', 'position unknown');
-  // Coordinates are only meaningful relative to a zero; saving before one would point nowhere.
   if (!S.referenced) return err('#jogErr', 'press Zero (or Restore) before saving positions');
   const pts = S.cfg.saved_points || [];
   pts.push({name: $('#ptName').value || `P${pts.length+1}`, x:p.X, y:p.Y, z:p.Z});
@@ -299,7 +596,6 @@ $('#setHome').onclick = async () => {
 };
 $('#restoreBtn').onclick = () => act('restore', {});
 
-// ---------- terminal ----------
 function sendCmd(){
   const v = $('#cmd').value.trim(); if (!v) return;
   hist.push(v); histI = hist.length; act('send', {gcode:v}); $('#cmd').value = '';
@@ -312,7 +608,6 @@ $('#cmd').onkeydown = e => {
 };
 $$('[data-q]').forEach(b => b.onclick = () => act('send', {gcode:b.dataset.q}));
 
-// ---------- sweep ----------
 function sweepParams(){
   const p = {};
   $$('[data-s]').forEach(el => {
@@ -336,6 +631,7 @@ async function doPreview(){
   $('#sweepInfo').textContent = `${preview.length} points × ${p.passes} pass(es) · path ${path.toFixed(1)} mm · est. ${fmtT(est)}`;
   $('#sweepErr').textContent = r.warning ? '⚠ ' + r.warning : '';
   draw();
+  updateScanPlan();  // the scan uses this same grid
 }
 function fmtT(s){ return s < 90 ? `${s.toFixed(0)} s` : `${(s/60).toFixed(1)} min`; }
 $$('[data-s]').forEach(el => el.addEventListener('input', schedulePreview));
@@ -344,35 +640,33 @@ $('#fromCorner1').onclick = () => { if (S.pos.X===null) return; $('[data-s=x1]')
 
 function draw(){
   const cv = $('#cv'), g = cv.getContext('2d'), W = cv.width, H = cv.height, pad = 36;
-  g.clearRect(0,0,W,H);
+  g.fillStyle = '#252525'; g.fillRect(0,0,W,H);
   if (!S) return;
   const L = S.cfg.limits, pos = S.pos;
-  // Frame = machine limits, so you see the sweep in context of the reachable bed.
   let xs = [L.X[0], L.X[1], ...preview.map(p=>p.x)], ys = [L.Y[0], L.Y[1], ...preview.map(p=>p.y)];
   if (pos.X !== null){ xs.push(pos.X); ys.push(pos.Y); }
   const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
   const sc = Math.min((W-2*pad)/((x1-x0)||1), (H-2*pad)/((y1-y0)||1));
   const ox = pad + ((W-2*pad) - (x1-x0)*sc)/2, oy = pad + ((H-2*pad) - (y1-y0)*sc)/2;
   const tx = x => ox + (x-x0)*sc, ty = y => H - (oy + (y-y0)*sc);
-  g.strokeStyle = '#2a2f36'; g.setLineDash([4,4]); g.strokeRect(tx(L.X[0]), ty(L.Y[1]), (L.X[1]-L.X[0])*sc, (L.Y[1]-L.Y[0])*sc); g.setLineDash([]);
-  g.fillStyle = '#8b939e'; g.font = '11px ui-monospace,monospace';
+  g.strokeStyle = '#4a4a4a'; g.setLineDash([4,4]); g.strokeRect(tx(L.X[0]), ty(L.Y[1]), (L.X[1]-L.X[0])*sc, (L.Y[1]-L.Y[0])*sc); g.setLineDash([]);
+  g.fillStyle = '#90a4ae'; g.font = '11px ' + MONO;
   g.fillText(`X ${L.X[0]}…${L.X[1]}  Y ${L.Y[0]}…${L.Y[1]}  (limits)`, tx(L.X[0]), ty(L.Y[1]) - 8);
   const sw = S.sweep, n = preview.length, active = ['running','paused'].includes(sw.state);
-  const cur = active ? sw.index % (n||1) : -1, donePass = active ? Math.floor(sw.index/(n||1)) : 0;
+  const cur = active ? sw.index % (n||1) : -1;
   g.strokeStyle = '#3d6b5a'; g.lineWidth = 1.5; g.beginPath();
   preview.forEach((p,i) => i ? g.lineTo(tx(p.x), ty(p.y)) : g.moveTo(tx(p.x), ty(p.y))); g.stroke();
   preview.forEach((p,i) => {
     g.beginPath(); g.arc(tx(p.x), ty(p.y), i===cur ? 6 : 3.5, 0, 7);
-    g.fillStyle = i===0 ? '#f0b429' : i===cur ? '#fff' : (active && (i<cur) ? '#2ecc8f' : '#4b5560');
+    g.fillStyle = i===0 ? '#ffd740' : i===cur ? '#fff' : (active && (i<cur) ? '#69f0ae' : '#5a5a5a');
     g.fill();
   });
-  if (n && n <= 120) { g.fillStyle = '#6b7480'; preview.forEach((p,i) => g.fillText(i, tx(p.x)+5, ty(p.y)-5)); }
+  if (n && n <= 120) { g.fillStyle = '#777'; preview.forEach((p,i) => g.fillText(i, tx(p.x)+5, ty(p.y)-5)); }
   if (pos.X !== null){
     const X = tx(pos.X), Y = ty(pos.Y);
-    g.strokeStyle = '#ff7a59'; g.lineWidth = 2; g.beginPath(); g.moveTo(X-10,Y); g.lineTo(X+10,Y); g.moveTo(X,Y-10); g.lineTo(X,Y+10); g.stroke();
+    g.strokeStyle = '#ff5252'; g.lineWidth = 2; g.beginPath(); g.moveTo(X-10,Y); g.lineTo(X+10,Y); g.moveTo(X,Y-10); g.lineTo(X,Y+10); g.stroke();
   }
 }
-
 $('#runBtn').onclick = async () => {
   const p = sweepParams();
   if (!confirm(`Run ${preview.length} × ${p.passes} point sweep at Z=${p.z}?`)) return;
@@ -382,12 +676,8 @@ $('#pauseBtn').onclick = () => act('sweep/pause', {pause: S.sweep.state !== 'pau
 $('#stopBtn').onclick = () => act('sweep/stop', {}, '#sweepErr');
 $('#exportBtn').onclick = async () => {
   const r = await api('sweep/gcode', sweepParams());
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([r.gcode], {type:'text/plain'}));
-  a.download = `sweep_${Date.now()}.gcode`; a.click();
+  download(new Blob([r.gcode], {type:'text/plain'}), `sweep_${Date.now()}.gcode`);
 };
-
-// ---------- settings ----------
 function fillCfg(c){
   $('#fXY').value = c.feed.XY; $('#fZ').value = c.feed.Z; $('#baud').value = c.baud;
   $('#enfLim').checked = c.enforce_limits; $('#sendSpm').checked = c.send_steps_on_connect;
@@ -410,17 +700,707 @@ $('#calBtn').onclick = () => {
   $('#calOut').textContent = `${ax}: ${cur} → ${nv.toFixed(3)} steps/mm (field updated; Save + Apply to use it)`;
 };
 
-// ---------- poll ----------
+// ═════════════ shared helpers ═════════════
+const dataDir = () => $('#daqDataDir').value || 'runs';
+const qd = () => 'dir=' + encodeURIComponent(dataDir());
+function download(blob, name){
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+function toCsv(rows, cols){
+  cols = cols || Object.keys(rows[0] || {});
+  const q = v => v == null ? '' : /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v);
+  return [cols.join(','), ...rows.map(r => cols.map(c => q(r[c])).join(','))].join('\n') + '\n';
+}
+const savePng = (cv, name) => cv.toBlob(b => download(b, name.replace(/[^\w.-]+/g, '_') + '.png'));
+// Backing store = on-screen size x devicePixelRatio, so text and lines stay crisp. Returns [ctx, W, H] in CSS px.
+function fitCanvas(cv, aspect, maxH, minH = 260){
+  const dpr = window.devicePixelRatio || 1, W = Math.round(cv.clientWidth || 700);
+  const H = Math.round(Math.max(minH, Math.min(W * aspect, maxH)));
+  if (cv.width !== Math.round(W * dpr) || cv.height !== Math.round(H * dpr)){
+    cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); cv.style.height = H + 'px';
+  }
+  const g = cv.getContext('2d'); g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return [g, W, H];
+}
+const visible = el => !!el.offsetParent;
+
+// SI formatting: 1.234e-8 V -> "12.34 nV"
+const PREFIXES = [[1e-15,'f'],[1e-12,'p'],[1e-9,'n'],[1e-6,'µ'],[1e-3,'m'],[1,''],[1e3,'k'],[1e6,'M']];
+function siScale(maxAbs){ let p = PREFIXES[5]; if (!(maxAbs > 0)) return p; p = PREFIXES[0]; for (const q of PREFIXES) if (maxAbs >= q[0] * 0.9995) p = q; return p; }
+function si(v, unit, digits = 4){
+  if (v == null || !isFinite(v)) return '—';
+  if (v === 0) return '0 ' + unit;
+  const [f, pre] = siScale(Math.abs(v));
+  return (v / f).toPrecision(digits) + ' ' + pre + unit;
+}
+const siLabel = (v, unit) => { const [f, pre] = siScale(Math.abs(v)); return `${+(v / f).toPrecision(6)} ${pre}${unit}`; };
+function niceStep(span, n){
+  const raw = (span || 1) / Math.max(1, n), mag = Math.pow(10, Math.floor(Math.log10(raw))), e = raw / mag;
+  return (e >= 7.5 ? 10 : e >= 3.5 ? 5 : e >= 1.5 ? 2 : 1) * mag;
+}
+function ticks(lo, hi, n){
+  const st = niceStep(hi - lo, n), out = [];
+  for (let t = Math.ceil(lo / st) * st; t <= hi + st * 1e-9; t += st) out.push(Math.abs(t) < st * 1e-9 ? 0 : t);
+  return {ticks: out, step: st};
+}
+const decimalsFor = (step, f = 1) => Math.min(6, Math.max(0, -Math.floor(Math.log10(step / f) + 1e-9)));
+const mean = a => a.reduce((s, v) => s + v, 0) / (a.length || 1);
+function windowed(samples, win){
+  if (!win || !samples.length) return samples;
+  const tEnd = samples[samples.length - 1].elapsed_s;
+  let i = samples.length - 1; while (i > 0 && samples[i - 1].elapsed_s >= tEnd - win) i--;
+  return samples.slice(i);
+}
+function medianInterval(samples){
+  const d = []; for (let i = Math.max(1, samples.length - 200); i < samples.length; i++) d.push(samples[i].elapsed_s - samples[i - 1].elapsed_s);
+  if (!d.length) return 0.2; d.sort((a, b) => a - b); return d[d.length >> 1] || 0.2;
+}
+function segmented(el, items, get, set){
+  el.innerHTML = items.map(([v, l]) => `<button data-v="${v}">${l}</button>`).join('');
+  const sync = () => [...el.children].forEach(b => b.classList.toggle('sel', b.dataset.v === String(get())));
+  [...el.children].forEach(b => b.onclick = () => { set(b.dataset.v); sync(); });
+  sync(); return sync;
+}
+
+// ═════════════ plotting (articulate: axes, units, grid, legend, hover, phasor) ═════════════
+const CH = [
+  {key: 'x', name: 'X', long: 'X (in-phase)', color: '#ff5252'},
+  {key: 'y', name: 'Y', long: 'Y (quadrature)', color: '#448aff'},
+  {key: 'r', name: 'R', long: 'R = √(X²+Y²)', color: '#69f0ae'},
+  {key: 'theta', name: 'θ', long: 'θ = atan2(Y, X)', color: '#ffd740'},
+];
+const GRID = 'rgba(176,190,197,0.15)', FRAME = 'rgba(176,190,197,0.35)', ZERO = 'rgba(255,255,255,0.35)', FG = '#b0bec5';
+
+function renderPlot(cv, o){
+  const [g, W, H] = fitCanvas(cv, o.aspect || 0.5, o.maxH || 600);
+  g.fillStyle = '#252525'; g.fillRect(0, 0, W, H);  // opaque, so PNG exports aren't transparent
+  g.textAlign = 'center'; g.fillStyle = FG; g.font = 'bold 12px ' + SANS;
+  g.fillText(o.title || '', W / 2, 17); g.textAlign = 'left';
+  const sets = (o.sets || []).filter(s => s.samples && s.samples.length);
+  if (!sets.length){ emptyState(g, W, H, o.empty || ['No data']); return null; }
+  return o.view === 'phasor' ? drawPhasor(g, W, H, sets, o) : drawTime(g, W, H, sets, o);
+}
+function emptyState(g, W, H, lines){
+  g.strokeStyle = FRAME; g.strokeRect(60.5, 28.5, W - 76, H - 64);
+  g.textAlign = 'center';
+  const y0 = H / 2 - (lines.length - 1) * 12;
+  lines.forEach((ln, i) => {
+    g.fillStyle = i ? FG : '#cce4ff'; g.font = (i ? '12px ' : 'bold 15px ') + SANS;
+    g.fillText(ln, W / 2, y0 + i * 24);
+  });
+  g.textAlign = 'left';
+}
+function drawTime(g, W, H, sets, o){
+  const L = 74, R = 14, T = 28, B = 40, pw = W - L - R, unit = o.unit || 'V';
+  const sigCh = CH.filter(c => c.key !== 'theta' && o.show[c.key]), phShow = o.show.theta;
+  const tmax = Math.max(...sets.map(s => s.samples[s.samples.length - 1].elapsed_s));
+  const tmin = Math.min(...sets.map(s => s.samples[0].elapsed_s));
+  let x0, x1;
+  if (o.win){ x1 = Math.max(tmax, tmin + o.win); x0 = x1 - o.win; }   // fills from the left, then scrolls
+  else { x0 = tmin; x1 = Math.max(tmax, tmin + 1e-3); }
+  const vis = sets.map(s => ({...s, samples: s.samples.filter(p => p.elapsed_s >= x0 - 1e-9)}));
+  const tx = t => L + (t - x0) / (x1 - x0) * pw;
+  const avail = H - T - B, panels = [];
+  if (sigCh.length && phShow){ panels.push({kind: 'sig', y: T, h: avail * 0.64 - 6}); panels.push({kind: 'ph', y: T + avail * 0.64 + 6, h: avail * 0.36 - 6}); }
+  else if (sigCh.length) panels.push({kind: 'sig', y: T, h: avail});
+  else if (phShow) panels.push({kind: 'ph', y: T, h: avail});
+  else { emptyState(g, W, H, ['All channels hidden', 'Tick a channel under Channel Values to show it']); return null; }
+  const tt = ticks(x0, x1, Math.max(2, Math.floor(pw / 90))), tdec = decimalsFor(tt.step);
+  const gapT = medianInterval(vis[0].samples) * 3.5;
+  const geom = {L, R, W, H, x0, x1, tx, panels: [], sets: vis, unit};
+  for (const P of panels){
+    let lo, hi, f = 1, lbl;
+    if (P.kind === 'sig'){
+      const vals = vis.flatMap(s => s.samples.flatMap(p => sigCh.map(c => p[c.key]))).filter(isFinite);
+      if (o.ymode === 'fs' && o.fullScale){ lo = -o.fullScale; hi = o.fullScale; }
+      else if (o.ymode === 'sym'){ const m = Math.max(1e-15, ...vals.map(Math.abs)); lo = -m * 1.1; hi = m * 1.1; }
+      else { lo = Math.min(...vals); hi = Math.max(...vals); const pad = (hi - lo) * 0.08 || Math.abs(hi) * 0.1 || 1e-12; lo -= pad; hi += pad; }
+      const sc = siScale(Math.max(Math.abs(lo), Math.abs(hi))); f = sc[0];
+      lbl = `Signal (${sc[1]}${unit})`;
+    } else { lo = -180; hi = 180; lbl = 'Phase (°)'; }
+    const ty = v => P.y + P.h - (v - lo) / (hi - lo) * P.h;
+    const yt = P.kind === 'ph' ? {ticks: [-180, -90, 0, 90, 180], step: 90} : ticks(lo, hi, Math.max(2, Math.floor(P.h / 40)));
+    const ydec = P.kind === 'ph' ? 0 : decimalsFor(yt.step, f);
+    g.lineWidth = 1; g.font = '10px ' + MONO; g.textAlign = 'right';
+    for (const t of yt.ticks){
+      const y = Math.round(ty(t)) + 0.5; if (y < P.y - 1 || y > P.y + P.h + 1) continue;
+      g.strokeStyle = t === 0 ? ZERO : GRID; g.beginPath(); g.moveTo(L, y); g.lineTo(L + pw, y); g.stroke();
+      g.fillStyle = FG; g.fillText((t / f).toFixed(ydec), L - 6, y + 3.5);
+    }
+    g.strokeStyle = GRID;
+    for (const t of tt.ticks){ const x = Math.round(tx(t)) + 0.5; g.beginPath(); g.moveTo(x, P.y); g.lineTo(x, P.y + P.h); g.stroke(); }
+    g.strokeStyle = FRAME; g.strokeRect(L + 0.5, Math.round(P.y) + 0.5, pw, Math.round(P.h));
+    g.save(); g.translate(14, P.y + P.h / 2); g.rotate(-Math.PI / 2); g.textAlign = 'center'; g.fillStyle = FG; g.font = '11px ' + SANS; g.fillText(lbl, 0, 0); g.restore();
+    // traces, clipped to the panel; breaks at gaps (and at phase wraps) instead of drawing false lines
+    g.save(); g.beginPath(); g.rect(L, P.y, pw, P.h); g.clip();
+    const chans = P.kind === 'sig' ? sigCh : [CH[3]];
+    vis.forEach((set, k) => chans.forEach(c => {
+      g.strokeStyle = c.color; g.lineWidth = 1.5; g.setLineDash(k ? [6, 4] : []); g.beginPath();
+      let pt = null, pv = null;
+      for (const p of set.samples){
+        const v = p[c.key], x = tx(p.elapsed_s), y = ty(v);
+        const brk = pt === null || p.elapsed_s - pt > gapT || (c.key === 'theta' && Math.abs(v - pv) > 180);
+        brk ? g.moveTo(x, y) : g.lineTo(x, y); pt = p.elapsed_s; pv = v;
+      }
+      g.stroke();
+      if (set.samples.length < 80){ g.fillStyle = c.color; for (const p of set.samples){ g.beginPath(); g.arc(tx(p.elapsed_s), ty(p[c.key]), 2.2, 0, 7); g.fill(); } }
+    }));
+    g.setLineDash([]);
+    if (P.kind === 'sig'){ g.fillStyle = '#ff5252'; for (const p of vis[0].samples) if (p.status && p.status.startsWith('overload')) g.fillRect(tx(p.elapsed_s) - 1, P.y + P.h - 7, 2, 7); }
+    g.restore();
+    // legend with the latest value of each trace
+    const last = vis[0].samples[vis[0].samples.length - 1];
+    const items = chans.map(c => `${c.name}  ${c.key === 'theta' ? last.theta.toFixed(2) + '°' : si(last[c.key], unit)}`);
+    g.font = '11px ' + MONO; g.textAlign = 'left'; const ws = items.map(t => g.measureText(t).width + 26);
+    let lx = L + 8; const ly = P.y + 6;
+    g.fillStyle = 'rgba(30,30,30,0.85)'; g.fillRect(lx - 4, ly - 2, ws.reduce((a, b) => a + b, 0) + 2, 19);
+    items.forEach((t, i) => { g.fillStyle = chans[i].color; g.fillRect(lx, ly + 6, 14, 3); g.fillStyle = '#e8e8e8'; g.fillText(t, lx + 19, ly + 12); lx += ws[i]; });
+    if (sets.length > 1 && P === panels[0]){
+      g.textAlign = 'right'; g.fillStyle = FG;
+      g.fillText(`solid: A ${sets[0].label}   dashed: B ${sets[1].label}`, L + pw - 6, ly + 12); g.textAlign = 'left';
+    }
+    geom.panels.push({...P, ty, chans});
+  }
+  const lastP = panels[panels.length - 1];
+  g.fillStyle = FG; g.font = '10px ' + MONO; g.textAlign = 'center';
+  for (const t of tt.ticks){ const x = tx(t); if (x >= L - 1 && x <= L + pw + 1) g.fillText(t.toFixed(tdec), x, lastP.y + lastP.h + 13); }
+  g.font = '11px ' + SANS; g.fillText('Time (s)', L + pw / 2, H - 6);
+  if (o.footer){ g.textAlign = 'right'; g.font = '10px ' + MONO; g.fillStyle = '#90a4ae'; g.fillText(o.footer, L + pw, H - 6); }
+  g.textAlign = 'left';
+  if (o.hover != null) drawHover(g, geom, o.hover);
+  return geom;
+}
+function drawHover(g, geom, hx){
+  const pw = geom.W - geom.L - geom.R;
+  if (hx < geom.L || hx > geom.L + pw) return;
+  const t = geom.x0 + (hx - geom.L) / pw * (geom.x1 - geom.x0), s0 = geom.sets[0].samples;
+  if (!s0.length) return;
+  let lo = 0, hi = s0.length - 1;
+  while (hi - lo > 1){ const mid = (lo + hi) >> 1; if (s0[mid].elapsed_s < t) lo = mid; else hi = mid; }
+  const p = Math.abs(s0[lo].elapsed_s - t) <= Math.abs(s0[hi].elapsed_s - t) ? s0[lo] : s0[hi];
+  const x = Math.round(geom.tx(p.elapsed_s)) + 0.5, top = geom.panels[0].y, last = geom.panels[geom.panels.length - 1], bot = last.y + last.h;
+  g.strokeStyle = 'rgba(255,255,255,0.6)'; g.setLineDash([3, 3]); g.beginPath(); g.moveTo(x, top); g.lineTo(x, bot); g.stroke(); g.setLineDash([]);
+  for (const P of geom.panels) for (const c of P.chans){ g.fillStyle = c.color; g.beginPath(); g.arc(x, P.ty(p[c.key]), 3.5, 0, 7); g.fill(); }
+  const u = geom.unit;
+  const lines = [[`t = ${p.elapsed_s.toFixed(3)} s`, '#cce4ff'], [`X = ${si(p.x, u)}`, CH[0].color], [`Y = ${si(p.y, u)}`, CH[1].color],
+                 [`R = ${si(p.r, u)}`, CH[2].color], [`θ = ${p.theta.toFixed(3)}°`, CH[3].color]];
+  if (p.status && p.status !== 'ok') lines.push([p.status, '#ff5252']);
+  g.font = '11px ' + MONO;
+  const bw = Math.max(...lines.map(l => g.measureText(l[0]).width)) + 16, bh = lines.length * 15 + 8;
+  let bx = x + 12; if (bx + bw > geom.L + pw) bx = x - 12 - bw;
+  const by = top + 26;
+  g.fillStyle = 'rgba(20,20,20,0.92)'; g.fillRect(bx, by, bw, bh); g.strokeStyle = '#555'; g.strokeRect(bx + 0.5, by + 0.5, bw, bh);
+  lines.forEach(([l, c], i) => { g.fillStyle = c; g.fillText(l, bx + 8, by + 16 + i * 15); });
+}
+function drawPhasor(g, W, H, sets, o){
+  const T = 30, B = 40, Lm = 74, unit = o.unit || 'V';
+  const vis = sets.map(s => ({...s, samples: windowed(s.samples, o.win)}));
+  const size = Math.max(120, Math.min(W - Lm - 220, H - T - B));
+  const cx0 = Lm, cy0 = T;
+  const vals = vis.flatMap(s => s.samples.flatMap(p => [Math.abs(p.x), Math.abs(p.y)]));
+  const m = (o.ymode === 'fs' && o.fullScale) ? o.fullScale : Math.max(1e-15, ...vals) * 1.15;
+  const [f, pre] = siScale(m);
+  const px = v => cx0 + (v + m) / (2 * m) * size, py = v => cy0 + size - (v + m) / (2 * m) * size;
+  const tk = ticks(-m, m, 6), dec = decimalsFor(tk.step, f);
+  g.font = '10px ' + MONO;
+  for (const t of tk.ticks){
+    const X = Math.round(px(t)) + 0.5, Y = Math.round(py(t)) + 0.5;
+    g.strokeStyle = t === 0 ? ZERO : GRID; g.beginPath(); g.moveTo(X, cy0); g.lineTo(X, cy0 + size); g.moveTo(cx0, Y); g.lineTo(cx0 + size, Y); g.stroke();
+    g.fillStyle = FG; g.textAlign = 'center'; g.fillText((t / f).toFixed(dec), X, cy0 + size + 13);
+    g.textAlign = 'right'; g.fillText((t / f).toFixed(dec), cx0 - 6, Y + 3.5);
+  }
+  g.strokeStyle = FRAME; g.strokeRect(cx0 + 0.5, cy0 + 0.5, size, size);
+  g.textAlign = 'center'; g.font = '11px ' + SANS; g.fillStyle = FG;
+  g.fillText(`X (${pre}${unit})`, cx0 + size / 2, H - 6);
+  g.save(); g.translate(14, cy0 + size / 2); g.rotate(-Math.PI / 2); g.fillText(`Y (${pre}${unit})`, 0, 0); g.restore();
+  g.textAlign = 'left';
+  const info = [];
+  vis.forEach((set, k) => {
+    const n = set.samples.length, rgb = k ? '255,82,82' : '68,138,255';
+    set.samples.forEach((p, i) => { g.fillStyle = `rgba(${rgb},${0.12 + 0.88 * (i + 1) / n})`; g.beginPath(); g.arc(px(p.x), py(p.y), 2.3, 0, 7); g.fill(); });
+    const mx = mean(set.samples.map(p => p.x)), my = mean(set.samples.map(p => p.y));
+    g.strokeStyle = k ? '#ff8a80' : '#69f0ae'; g.lineWidth = 2; g.beginPath(); g.moveTo(px(0), py(0)); g.lineTo(px(mx), py(my)); g.stroke(); g.lineWidth = 1;
+    g.beginPath(); g.arc(px(mx), py(my), 5, 0, 7); g.stroke();
+    info.push([`${sets.length > 1 ? (k ? 'B ' : 'A ') : ''}mean X+iY (n=${n})`, k ? '#ff8a80' : '#69f0ae'],
+              [`  |·| = ${si(Math.hypot(mx, my), unit)}`, '#e8e8e8'], [`  ∠  = ${(Math.atan2(my, mx) * 180 / Math.PI).toFixed(2)}°`, '#e8e8e8']);
+  });
+  const last = vis[0].samples[vis[0].samples.length - 1];
+  g.fillStyle = '#ffd740'; g.beginPath(); g.arc(px(last.x), py(last.y), 5, 0, 7); g.fill();
+  info.push(['latest (yellow)', '#ffd740'], [`  X = ${si(last.x, unit)}`, CH[0].color], [`  Y = ${si(last.y, unit)}`, CH[1].color], [`  θ = ${last.theta.toFixed(2)}°`, CH[3].color]);
+  g.font = '11px ' + MONO;
+  info.forEach(([t, c], i) => { g.fillStyle = c; g.fillText(t, cx0 + size + 18, cy0 + 14 + i * 16); });
+  return null;
+}
+
+// ═════════════ SR860: state ═════════════
+const DAQ_RATES = [1, 2, 5, 10, 20];
+let daqRate = 10, daqLogSeq = 0, sampleSeq = 0, daqPrevState = null, prevConnected = null;
+let stream = {id: null, kind: null, samples: []};
+const live = {view: 'time', win: 30, ymode: 'auto', show: {x: true, y: true, r: true, theta: true}, paused: null, hover: null};
+const histV = {view: 'time', win: null, ymode: 'auto', hover: null, sets: null, label: ''};
+let controls = [], actionLabels = {}, ctlValues = {}, lastAlertAt = 0, newSamples = false;
+
+segmented($('#daqRateSteps'), DAQ_RATES.map(r => [r, `${r} Hz`]), () => daqRate, v => { daqRate = +v; });
+const syncWin = segmented($('#winBtns'), [['10', '10 s'], ['30', '30 s'], ['60', '1 min'], ['300', '5 min'], ['all', 'All']],
+  () => live.win ? String(live.win) : 'all', v => { live.win = v === 'all' ? null : +v; redrawAll(); });
+segmented($('#yBtns'), [['auto', 'Auto'], ['sym', '±'], ['fs', 'FS']], () => live.ymode, v => { live.ymode = v; drawLive(); });
+segmented($('#viewBtns'), [['time', 'Time'], ['phasor', 'X–Y phasor']], () => live.view, v => { live.view = v; drawLive(); });
+segmented($('#hyBtns'), [['auto', 'Auto'], ['sym', '±'], ['fs', 'FS']], () => histV.ymode, v => { histV.ymode = v; drawHist(); });
+segmented($('#hviewBtns'), [['time', 'Time'], ['phasor', 'X–Y phasor']], () => histV.view, v => { histV.view = v; drawHist(); });
+$('#livePause').onclick = () => {
+  live.paused = live.paused ? null : stream.samples.slice();
+  $('#livePause').textContent = live.paused ? '▶ Resume' : '❚❚ Pause';
+  $('#livePause').classList.toggle('on', !!live.paused);
+  drawLive();
+};
+for (const cv of [$('#daqCv'), $('#histCv')]){
+  const st = cv.id === 'daqCv' ? live : histV;
+  cv.addEventListener('mousemove', e => { st.hover = e.offsetX; cv.id === 'daqCv' ? drawLive() : drawHist(); });
+  cv.addEventListener('mouseleave', () => { st.hover = null; cv.id === 'daqCv' ? drawLive() : drawHist(); });
+}
+
+// channel cards (RapidaQ's per-channel live value strip)
+$('#chanCards').innerHTML = CH.map(c => `<div class="chcard" id="ch-${c.key}" style="--c:${c.color}">
+  <label class="chk chname"><input type="checkbox" data-show="${c.key}" checked> ${c.long}</label><span class="chunit"></span>
+  <div class="chval">—</div><div class="chstats"><span>mean —</span><span>SD —</span><span>min —</span><span>max —</span></div></div>`).join('');
+$$('[data-show]').forEach(cb => cb.onchange = () => { live.show[cb.dataset.show] = cb.checked; renderChannels(); drawLive(); });
+
+const sigUnit = () => ctlValues.input_mode === 'current' ? 'A' : 'V';
+const fullScale = () => ctlValues.input_mode === 'current' ? ctlValues.sensitivity_a : ctlValues.sensitivity_v;
+const liveSamples = () => live.paused || stream.samples;
+const isRunning = d => d && ['running', 'settling'].includes(d.run.state);
+
+function channelStats(samples){
+  const out = {};
+  for (const c of CH.slice(0, 3)){
+    const v = samples.map(p => p[c.key]); if (!v.length) continue;
+    const m = mean(v), sd = v.length > 1 ? Math.sqrt(v.reduce((s, x) => s + (x - m) ** 2, 0) / (v.length - 1)) : 0;
+    out[c.key] = {mean: m, sd, min: Math.min(...v), max: Math.max(...v)};
+  }
+  if (samples.length){
+    // θ: phase of the mean phasor (not the mean of angles, which breaks across ±180°) and circular SD.
+    const th = samples.map(p => p.theta * Math.PI / 180), C = mean(th.map(Math.cos)), Sn = mean(th.map(Math.sin));
+    const rbar = Math.min(1, Math.hypot(C, Sn));
+    out.theta = {mean: Math.atan2(out.y.mean, out.x.mean) * 180 / Math.PI, sd: Math.sqrt(-2 * Math.log(Math.max(rbar, 1e-12))) * 180 / Math.PI,
+                 min: Math.min(...samples.map(p => p.theta)), max: Math.max(...samples.map(p => p.theta))};
+  }
+  return out;
+}
+function renderChannels(){
+  const samples = windowed(liveSamples(), live.win), st = channelStats(samples), last = samples[samples.length - 1], u = sigUnit();
+  $('#chanWin').textContent = samples.length ? `stats over ${live.win ? 'last ' + (live.win >= 60 ? live.win / 60 + ' min' : live.win + ' s') : 'all'} · n=${samples.length}${live.paused ? ' · PAUSED' : ''}` : '';
+  for (const c of CH){
+    const el = $(`#ch-${c.key}`), s = st[c.key], ph = c.key === 'theta';
+    const f = v => ph ? (v == null ? '—' : v.toFixed(2) + '°') : si(v, u);
+    el.classList.toggle('off', !live.show[c.key]);
+    el.querySelector('.chunit').textContent = ph ? 'deg' : u;
+    el.querySelector('.chval').textContent = last ? f(last[c.key]) : '—';
+    el.querySelector('.chstats').innerHTML = s
+      ? `<span>mean ${f(s.mean)}</span><span>${ph ? 'circ SD' : 'SD'} ${ph ? s.sd.toFixed(2) + '°' : f(s.sd)}</span><span>min ${f(s.min)}</span><span>max ${f(s.max)}</span>`
+      : '<span>mean —</span><span>SD —</span><span>min —</span><span>max —</span>';
+  }
+}
+function drawLive(){
+  const cv = $('#daqCv'); if (!visible(cv)) return;
+  const d = S && S.daq, samples = liveSamples(), running = isRunning(d);
+  const kind = stream.kind === 'run' ? 'RECORDING' : 'LIVE · not recording';
+  let empty;
+  if (!d || !d.connected) empty = ['SR860 not connected',
+    '1 · Rear-panel USB cable plugged in, SR860 switched on',
+    '2 · Device Settings (left): pick the USB0::…::INSTR instrument   (↻ re-scans)',
+    '3 · Press ▶ Connect   (green button, top right)'];
+  else if (!d.monitoring && !running) empty = [`Connected to ${d.identity.model} SN${d.identity.serial}`,
+    'Tick “Live view” (left) to watch the signal without recording,', 'or press ● Record to record a run'];
+  else empty = ['Waiting for samples…'];
+  const sets = (d && d.connected) || live.paused ? [{samples, label: kind}] : [];
+  live.geom = renderPlot(cv, {sets, title: 'Real-Time Lock-in Output' + (samples.length && sets.length ? ` — ${live.paused ? 'PAUSED' : kind}` : ''),
+    view: live.view, win: live.win, ymode: live.ymode, show: live.show, fullScale: fullScale(), unit: sigUnit(), hover: live.hover, empty,
+    aspect: 0.56, maxH: 640, footer: samples.length ? `${samples.length} samples buffered` : ''});
+}
+function drawHist(){
+  const cv = $('#histCv'); if (!visible(cv)) return;
+  renderPlot(cv, {sets: histV.sets || [], title: histV.label || 'Recorded Run', view: histV.view, win: null, ymode: histV.ymode,
+    show: live.show, fullScale: fullScale(), unit: sigUnit(), hover: histV.hover, aspect: 0.56, maxH: 640,
+    empty: ['No run open', 'Pick a run on the left and press Open, or mark A and B and press Compare']});
+}
+
+// ═════════════ SR860: connection, live view, recording ═════════════
+async function loadDaqResources(){
+  const {resources} = await api('daq/resources');
+  const sel = $('#daqResource'), want = sel.value || sel.dataset.saved;
+  const none = S && S.daq && S.daq.mock
+    ? '<option value="mock://bench">mock://bench (simulated SR860)</option>'
+    : '<option value="">no instrument found: check the rear USB cable, then ↻</option>';
+  sel.innerHTML = resources.map(r => `<option ${r===want?'selected':''}>${esc(r)}</option>`).join('') || none;
+}
+$('#daqResRefresh').onclick = loadDaqResources;
+$('#daqConnBtn').onclick = async () => {
+  if (!$('#daqResource').value) return err('#daqErr', 'no instrument selected: check the cable and press ↻ (Device Settings)');
+  $('#daqConnBtn').disabled = true; $('#daqConnBtn').textContent = 'Connecting…';
+  await act('daq/connect', {resource: $('#daqResource').value}, '#daqErr');
+  $('#daqConnBtn').textContent = '▶ Connect';
+};
+$('#daqDiscBtn').onclick = () => act('daq/disconnect', {}, '#daqErr');
+$('#daqPingBtn').onclick = () => act('daq/ping', {}, '#daqErr');
+$('#daqLive').onchange = () => act('daq/monitor', {on: $('#daqLive').checked}, '#daqErr');
+
+function parseHMS(s){
+  s = (s || '').trim(); if (!s) return null;
+  const parts = s.split(':').map(Number); if (parts.some(n => !isFinite(n) || n < 0)) return NaN;
+  const sec = parts.reduce((a, p) => a * 60 + p, 0); return sec || null;
+}
+const fmtHMS = sec => { sec = Math.max(0, Math.round(sec)); return [sec / 3600 | 0, (sec % 3600) / 60 | 0, sec % 60].map(v => String(v).padStart(2, '0')).join(':'); };
+$('#daqRecBtn').onclick = () => {
+  if (isRunning(S && S.daq)) return act('daq/run/stop', {}, '#daqErr');
+  const dur = parseHMS($('#daqDuration').value);
+  if (Number.isNaN(dur)) return err('#daqErr', 'Limit must be HH:MM:SS, MM:SS or seconds (blank = until stopped)');
+  act('daq/run/start', {duration_s: dur, rate_hz: daqRate, settle_s: +$('#daqSettle').value || 0,
+    condition: $('#daqCondition').value, notes: $('#daqNotes').value, run_id: $('#daqRunId').value.trim(), data_dir: dataDir()}, '#daqErr');
+};
+$('#daqAbortBtn').onclick = () => { if (confirm('Abort this run? It will be marked aborted/incomplete; data already written is kept.')) act('daq/run/abort', {}, '#daqErr'); };
+$('#daqPng').onclick = () => savePng($('#daqCv'), `sr860_${live.view}_${new Date().toISOString().replace(/[:.]/g, '-')}`);
+
+const fmtV = v => v == null ? '—' : v.toExponential(3);
+function fmtSummary(s){
+  if (!s) return '';
+  const st = s.stats || {}, X = st.X_V, Y = st.Y_V, R = st.R_V, mc = st.mean_complex;
+  return [
+    `${(s.end_state || '?').toUpperCase()}${s.incomplete ? ' (incomplete)' : ''} · ${s.duration_s}s`,
+    `samples ${s.n_samples} · errors ${s.n_errors} · overloaded ${s.n_overload}`,
+    `rate ${s.achieved_rate_hz ?? '—'} Hz (target ${s.target_rate_hz}) · jitter sd ${s.interval_sd_ms ?? '—'} ms, max gap ${s.interval_max_ms ?? '—'} ms`,
+    `USB latency mean ${s.latency_mean_ms ?? '—'} ms, max ${s.latency_max_ms ?? '—'} ms`,
+    X ? `X ${si(X.mean, 'V')} ± ${si(X.sd, 'V')}` : 'no clean samples for stats',
+    Y ? `Y ${si(Y.mean, 'V')} ± ${si(Y.sd, 'V')}` : '',
+    R ? `R ${si(R.mean, 'V')} ± ${si(R.sd, 'V')}` : '',
+    mc ? `mean X+iY: |${si(mc.magnitude_v, 'V')}| ∠ ${mc.phase_deg.toFixed(2)}°` : '',
+    s.stationary === false ? '⚠ stage moved during run' : '',
+    s.settings_changed && s.settings_changed.length ? `⚠ settings changed: ${s.settings_changed.join(', ')}` : '',
+    s.xy_output_processing && s.xy_output_processing.length ? `⚠ X/Y include SR860 output processing: ${s.xy_output_processing.join(', ')}` : '',
+    s.end_reason && s.end_reason.startsWith('communication') ? `⚠ ${s.end_reason}` : '',
+    s.file ? '→ ' + s.file.split(/[\\/]/).pop() : '',
+  ].filter(Boolean).join('\n');
+}
+
+// ═════════════ SR860: instrument controls ═════════════
+function optLabel(c, o){
+  if (typeof o === 'number' && ['V', 'A', 's'].includes(c.unit)) return siLabel(o, c.unit);
+  if (typeof o === 'number' && c.unit === 'V/A') return `${o.toExponential(0)} V/A`;
+  return c.unit ? `${o} ${c.unit}` : String(o);
+}
+function ctlInput(c){
+  if (c.kind === 'choice') return `<select data-ctl="${c.name}">${c.options.map((o, i) => `<option value="${i}">${esc(optLabel(c, o))}</option>`).join('')}</select>`;
+  if (c.kind === 'bool') return `<input type="checkbox" data-ctl="${c.name}">`;
+  return `<div class="fl"><input data-ctl="${c.name}" type="number" step="any" min="${c.min}" max="${c.max}"><button class="apply" data-setbtn="${c.name}">Set</button></div>`;
+}
+const ctlRow = c => `<div class="frow" data-ctlrow="${c.name}"><span>${esc(c.label)}${c.kind !== 'choice' && c.unit ? ` (${esc(c.unit)})` : ''}</span>${ctlInput(c)}</div>`;
+async function loadControls(){
+  const r = await api('daq/controls');
+  controls = r.controls; actionLabels = r.actions;
+  const groups = {};
+  controls.forEach(c => (groups[c.group] = groups[c.group] || []).push(c));
+  const hints = {'Gain & filter': 'Sensitivity sets the full scale (FS button on the plot).',
+                 'Reference': 'Frequency sets the internal reference (0.001 Hz–500 kHz).',
+                 'Output offsets': 'Offsets change the SR860’s own displayed outputs. R in this app is computed from X and Y, so only X/Y offsets affect the recorded data (flagged in each run).'};
+  $('#instGroups').innerHTML = Object.entries(groups).map(([gname, cs]) =>
+    `<fieldset class="group"><legend>${esc(gname)}</legend>${cs.map(ctlRow).join('')}${hints[gname] ? `<div class="note">${esc(hints[gname])}</div>` : ''}</fieldset>`).join('') +
+    `<fieldset class="group"><legend>Auto Functions</legend><div class="btnrow">${Object.entries(actionLabels).map(([k, l]) => `<button data-action="${k}">${esc(l)}</button>`).join('')}</div>
+     <div class="note">Auto phase shifts the reference phase so θ ≈ 0. Auto range / auto scale choose the input range and sensitivity. The new values are read back and logged.</div></fieldset>`;
+  $('#quickCtl').innerHTML = ['sensitivity_v', 'sensitivity_a', 'time_constant', 'filter_slope']
+    .map(n => controls.find(c => c.name === n)).filter(Boolean).map(ctlRow).join('');
+  for (const el of $$('[data-ctl]')){
+    const c = controls.find(x => x.name === el.dataset.ctl);
+    if (c.kind === 'choice') el.onchange = () => setCtl(c.name, c.options[+el.value]);
+    else if (c.kind === 'bool') el.onchange = () => setCtl(c.name, el.checked);
+    else el.onkeydown = e => { if (e.key === 'Enter') setCtl(c.name, el.value); };
+  }
+  $$('[data-setbtn]').forEach(b => b.onclick = () => setCtl(b.dataset.setbtn, b.parentElement.querySelector('input').value));
+  $$('[data-action]').forEach(b => b.onclick = () => doAction(b.dataset.action));
+  renderCtlValues();
+}
+function renderCtlValues(){
+  const mode = ctlValues.input_mode;
+  for (const c of controls){
+    const v = ctlValues[c.name];
+    for (const el of $$(`[data-ctl="${c.name}"]`)){
+      if (document.activeElement === el && el.type === 'number') continue;  // don't overwrite what's being typed
+      if (c.kind === 'choice'){
+        const i = c.options.findIndex(o => o === v || (typeof o === 'number' && typeof v === 'number' && Math.abs(o - v) <= 1e-9 * Math.abs(o)));
+        el.value = i >= 0 ? String(i) : '';
+      } else if (c.kind === 'bool') el.checked = !!v;
+      else el.value = v == null ? '' : +(+v).toPrecision(9);
+    }
+    // voltage-only / current-only controls follow the input mode
+    $$(`[data-ctlrow="${c.name}"]`).forEach(row => row.style.display = c.mode && mode && c.mode !== mode ? 'none' : '');
+  }
+}
+async function loadSettings(){
+  if (!S || !S.daq || !S.daq.connected || isRunning(S.daq)) return;
+  const r = await api('daq/settings');
+  if (r.ok){ ctlValues = r.values; renderCtlValues(); $('#instInfo').textContent = 'read from the SR860 at ' + new Date().toLocaleTimeString(); redrawAll(); }
+  else $('#instInfo').textContent = r.error;
+}
+$('#instRefresh').onclick = loadSettings;
+async function setCtl(name, value){
+  const r = await api('daq/set', {name, value});
+  if (r.ok === false) err('#daqErr', r.error);
+  if (r.value !== undefined) ctlValues[name] = r.value;
+  if (name === 'input_mode') await loadSettings();
+  renderCtlValues(); redrawAll();
+}
+async function doAction(name){
+  $$('[data-action]').forEach(b => b.disabled = true);
+  const r = await api('daq/action', {name});
+  if (r.ok === false) err('#daqErr', r.error); else { Object.assign(ctlValues, r.values || {}); renderCtlValues(); }
+}
+
+// ═════════════ history (Log Analysis) ═════════════
+let histA = null, histB = null;
+async function loadDaqHistory(){
+  const r = await api('daq/history?' + qd());
+  if (!r.ok){ $('#daqHistInfo').textContent = r.error || 'failed to list runs'; return; }
+  $('#daqHist').innerHTML = (r.runs || []).map(run => `<div><b title="${esc(run.name)}">${esc(run.name.replace(/^AE_/, ''))}</b>
+    <button data-open="${esc(run.name)}">Open</button>
+    <button data-ha="${esc(run.name)}" class="${run.name===histA?'sel':''}" title="Compare: A">A</button>
+    <button data-hb="${esc(run.name)}" class="${run.name===histB?'sel':''}" title="Compare: B">B</button></div>`).join('') || '<span class="note">no runs in this folder yet</span>';
+  $$('[data-open]').forEach(b => b.onclick = () => openDaqHistory(b.dataset.open));
+  $$('[data-ha]').forEach(b => b.onclick = () => { histA = b.dataset.ha; loadDaqHistory(); });
+  $$('[data-hb]').forEach(b => b.onclick = () => { histB = b.dataset.hb; loadDaqHistory(); });
+  $('#daqCmpBtn').disabled = !(histA && histB && histA !== histB);
+}
+async function fetchRun(name){
+  const n = encodeURIComponent(name);
+  const [csvR, jsonR] = await Promise.all([api(`daq/history/file?${qd()}&name=${n}&ext=csv`), api(`daq/history/file?${qd()}&name=${n}&ext=json`)]);
+  if (!csvR.ok) throw new Error(csvR.error);
+  // Keep overloaded rows (real readings, just flagged); drop only failed reads, which have no values.
+  const samples = csvR.rows.filter(r => r.X_V !== '' && r.X_V != null).map(r => ({
+    elapsed_s: +r.elapsed_s, x: +r.X_V, y: +r.Y_V, r: +r.R_V, theta: +r.theta_deg, status: r.status}));
+  return {samples, meta: jsonR.ok ? jsonR.data : null};
+}
+async function openDaqHistory(name){
+  try {
+    const {samples, meta} = await fetchRun(name);
+    histV.sets = [{samples, label: name}]; histV.label = name;
+    $('#daqHistInfo').textContent = meta
+      ? `${name}\ncondition: ${meta.condition || '(none)'}${meta.notes ? ' · ' + meta.notes : ''}\n` + fmtSummary(meta)
+      : `${name}\n(no metadata: run still in progress or ended abnormally)`;
+    drawHist();
+  } catch(e){ $('#daqHistInfo').textContent = String(e.message || e); }
+}
+$('#daqCmpBtn').onclick = async () => {
+  try {
+    const [a, b, d] = await Promise.all([fetchRun(histA), fetchRun(histB),
+      api(`daq/compare?${qd()}&a=${encodeURIComponent(histA)}&b=${encodeURIComponent(histB)}`)]);
+    if (!d.ok) throw new Error(d.error);
+    histV.sets = [{samples: a.samples, label: 'A'}, {samples: b.samples, label: 'B'}];
+    histV.label = 'A − B comparison';
+    $('#daqHistInfo').textContent = [
+      `A: ${histA} (${d.condition_a || '?'})`, `B: ${histB} (${d.condition_b || '?'})`,
+      'A − B, complex difference of the mean X/Y (not R_A − R_B):',
+      `ΔX ${si(d.dX_V, 'V')}   ΔY ${si(d.dY_V, 'V')}`,
+      `|Δ| ${si(d.dmag_V, 'V')}   ∠Δ ${d.dphase_deg.toFixed(2)}°`,
+      d.same_position ? 'same stage position ✓' : `⚠ different positions: A ${JSON.stringify(d.position_a)} B ${JSON.stringify(d.position_b)}`,
+    ].join('\n');
+    drawHist();
+  } catch(e){ $('#daqHistInfo').textContent = String(e.message || e); }
+};
+$('#daqSumCsv').onclick = async () => {
+  const r = await api('daq/history/summary?' + qd());
+  if (!r.ok) return err('#daqErr', r.error);
+  if (!r.rows.length) return err('#daqErr', 'no completed runs to summarize');
+  download(new Blob([toCsv(r.rows, r.columns)], {type: 'text/csv'}), `runs_summary_${new Date().toISOString().slice(0, 10)}.csv`);
+};
+$('#histPng').onclick = () => savePng($('#histCv'), histV.label || 'run');
+$('#daqHistRefresh').onclick = loadDaqHistory;
+
+// ═════════════ XYZ scan ═════════════
+const HM_METRICS = {
+  scan: [['mag_V','|mean X + iY| (V)','seq'], ['X_mean_V','X mean (V)','div'], ['Y_mean_V','Y mean (V)','div'],
+         ['phase_deg','phase of mean (°)','phase'], ['R_mean_V','R mean (V)','seq'], ['R_sd_V','R SD (V)','seq']],
+  compare: [['dmag_V','|Δ| = √(ΔX²+ΔY²) (V)','seq'], ['dX_V','ΔX (V)','div'], ['dY_V','ΔY (V)','div'], ['dphase_deg','∠Δ (°)','phase']],
+};
+let hm = null, scA = null, scB = null, scLastName = null, scLastDone = -1, scPrevState = null;
+function scanParams(){
+  return {...sweepParams(), z_planes: $('#scZ').value.trim(), duration_s: +$('#scDur').value,
+    start_index: +$('#scStartIdx').value || 0, rate_hz: daqRate, settle_s: +$('#daqSettle').value || 0,
+    condition: $('#daqCondition').value, notes: $('#daqNotes').value, data_dir: dataDir()};
+}
+let scPlanTimer;
+function updateScanPlan(){
+  clearTimeout(scPlanTimer);
+  scPlanTimer = setTimeout(async () => {
+    const p = scanParams(), r = await api('scan/preview', p), n = (r.points || []).length;
+    const per = (p.duration_s || 0) + (p.settle_s || 0) + 1;
+    $('#scPlan').textContent = `${n} points${n ? ` · ≈ ${fmtT(Math.max(0, n - p.start_index) * per)}` : ''}${r.warning ? ' · ⚠ ' + r.warning : ''}`;
+  }, 200);
+}
+['#scZ','#scDur','#scStartIdx','#daqSettle'].forEach(id => $(id).addEventListener('input', updateScanPlan));
+$('#scStart').onclick = async () => {
+  const p = scanParams(), r = await api('scan/preview', p);
+  if (r.warning) return err('#scErr', r.warning);
+  const n = r.points.length - p.start_index;
+  if (!confirm(`Scan ${n} point(s) at Z = ${p.z_planes || p.z} mm, ${p.duration_s} s each at ${p.rate_hz} Hz, condition "${p.condition || 'none'}"?\nThe stage moves between points.`)) return;
+  act('scan/start', p, '#scErr');
+};
+$('#scStop').onclick = () => act('scan/stop', {}, '#scErr');
+async function loadScans(){
+  const r = await api('scan/list?' + qd());
+  if (!r.ok) return;
+  $('#scList').innerHTML = r.scans.map(s => `<div><b title="${esc(s.name)}">${esc(s.condition || 'scan')} · ${esc(s.state)} · ${s.points_done}/${s.n_points} · ${esc(s.name.slice(5, 20))}</b>
+    <button data-sview="${esc(s.name)}">View</button>
+    <button data-sa="${esc(s.name)}" class="${s.name===scA?'sel':''}" title="Compare: A">A</button>
+    <button data-sb="${esc(s.name)}" class="${s.name===scB?'sel':''}" title="Compare: B">B</button></div>`).join('') || '<span class="note">no scans yet</span>';
+  $$('[data-sview]').forEach(b => b.onclick = () => openScan(b.dataset.sview));
+  $$('[data-sa]').forEach(b => b.onclick = () => { scA = b.dataset.sa; loadScans(); });
+  $$('[data-sb]').forEach(b => b.onclick = () => { scB = b.dataset.sb; loadScans(); });
+  $('#scCmpBtn').disabled = !(scA && scB && scA !== scB);
+}
+$('#scRefresh').onclick = loadScans;
+const linspace = (a, b, n) => n > 1 ? Array.from({length: n}, (_, i) => +(a + (b - a) * i / (n - 1)).toFixed(4)) : [+a];
+async function openScan(name){
+  const r = await api(`scan/read?${qd()}&name=${encodeURIComponent(name)}`);
+  if (!r.ok) return err('#scErr', r.error);
+  const m = r.meta, pr = m.params || {};
+  setHeatmap({mode: 'scan', name, rows: r.rows, title: `${m.condition || 'scan'} · ${name}`,
+    xs: linspace(+pr.x0, +pr.x1, +pr.nx).sort((a, b) => a - b),
+    ys: linspace(+pr.y0, +pr.y1, +pr.ny).sort((a, b) => a - b),
+    planes: m.planes,
+    info: `${m.state} · ${m.points_done}/${m.n_points} points · ${m.per_point.duration_s} s @ ${m.per_point.rate_hz} Hz${m.msg ? ' · ' + m.msg : ''}`});
+}
+$('#scCmpBtn').onclick = async () => {
+  const r = await api(`scan/compare?${qd()}&a=${encodeURIComponent(scA)}&b=${encodeURIComponent(scB)}`);
+  if (!r.ok) return err('#scErr', r.error);
+  setHeatmap({mode: 'compare', name: `${scA}__minus__${scB}`, rows: r.rows,
+    title: `A − B: ${r.condition_a || 'A'} − ${r.condition_b || 'B'}`,
+    info: `${r.rows.length} matched points${r.only_in_a || r.only_in_b ? ` · unmatched: ${r.only_in_a} only in A, ${r.only_in_b} only in B` : ''} · saved ${r.file.split('/').pop()}`});
+};
+function setHeatmap(h){
+  const keepMetric = hm && hm.mode === h.mode ? $('#hmMetric').value : null, keepPlane = $('#hmPlane').value;
+  hm = h;
+  $('#hmMetric').innerHTML = HM_METRICS[h.mode].map(([k, l]) => `<option value="${k}">${esc(l)}</option>`).join('');
+  if (keepMetric) $('#hmMetric').value = keepMetric;
+  const planes = h.planes || [...new Set(h.rows.map(r => +r.z_mm))].sort((a, b) => a - b);
+  $('#hmPlane').innerHTML = planes.map(z => `<option value="${z}">${z}</option>`).join('');
+  if (planes.map(String).includes(keepPlane)) $('#hmPlane').value = keepPlane;
+  $('#hmInfo').textContent = h.info;
+  drawHeatmap();
+}
+$('#hmMetric').onchange = () => drawHeatmap();
+$('#hmPlane').onchange = () => drawHeatmap();
+const RAMP_SEQ = ['#440154', '#3b528b', '#21918c', '#5ec962', '#fde725'];  // viridis
+const RAMP_DIV = ['#3b4cc0', '#8db0fe', '#dddddd', '#f49a7b', '#b40426'];  // cool-warm, light at 0
+function ramp(stops, t){
+  t = Math.max(0, Math.min(1, t));
+  const s = t * (stops.length - 1), i = Math.min(Math.floor(s), stops.length - 2), f = s - i;
+  const a = parseInt(stops[i].slice(1), 16), b = parseInt(stops[i + 1].slice(1), 16);
+  const mix = sh => Math.round(((a >> sh) & 255) * (1 - f) + ((b >> sh) & 255) * f);
+  return [mix(16), mix(8), mix(0)];
+}
+function drawHeatmap(){
+  const cv = $('#hmCv'); if (!visible(cv)) return;
+  const [g, W, H] = fitCanvas(cv, 0.6, 540);
+  g.fillStyle = '#252525'; g.fillRect(0, 0, W, H); g.font = '11px ' + MONO;
+  if (!hm){ emptyState(g, W, H, ['No scan open', 'Pick a scan on the right and press View']); return; }
+  const metric = $('#hmMetric').value, kind = HM_METRICS[hm.mode].find(m => m[0] === metric), z = +$('#hmPlane').value;
+  const k3 = v => (+v).toFixed(3);
+  const rows = hm.rows.filter(r => k3(r.z_mm) === k3(z));
+  const xs = hm.xs || [...new Set(hm.rows.map(r => +r.x_mm))].sort((a, b) => a - b);
+  const ys = hm.ys || [...new Set(hm.rows.map(r => +r.y_mm))].sort((a, b) => a - b);
+  const cell = {}; rows.forEach(r => cell[k3(r.x_mm) + ',' + k3(r.y_mm)] = r);
+  const vals = rows.map(r => r[metric]).filter(v => typeof v === 'number' && isFinite(v));
+  let lo, hi, stops;
+  if (kind[2] === 'div'){ const mx = Math.max(0, ...vals.map(Math.abs)) || 1; lo = -mx; hi = mx; stops = RAMP_DIV; }
+  else if (kind[2] === 'phase'){ lo = -180; hi = 180; stops = RAMP_DIV; }
+  else { lo = vals.length ? Math.min(...vals) : 0; hi = vals.length ? Math.max(...vals) : 1; if (hi === lo) hi = lo + (Math.abs(lo) || 1); stops = RAMP_SEQ; }
+  const fmt = kind[2] === 'phase' ? (v => v.toFixed(1) + '°') : (v => si(v, 'V', 3));
+  const L = 56, R = 96, T = 30, B = 40, pw = W - L - R, ph = H - T - B;
+  const cw = pw / xs.length, chh = ph / ys.length;
+  xs.forEach((x, i) => ys.forEach((y, j) => {
+    const px = L + i * cw, py = T + (ys.length - 1 - j) * chh;
+    const r = cell[k3(x) + ',' + k3(y)], v = r ? r[metric] : null;
+    if (typeof v === 'number' && isFinite(v)){
+      const [cr, cg, cb] = ramp(stops, (v - lo) / (hi - lo));
+      g.fillStyle = `rgb(${cr},${cg},${cb})`; g.fillRect(px, py, cw - 1, chh - 1);
+      if (cw > 70 && chh > 18){ g.fillStyle = (0.299 * cr + 0.587 * cg + 0.114 * cb) > 140 ? '#000' : '#fff'; g.fillText(fmt(v), px + 4, py + chh / 2 + 4); }
+    } else {
+      g.fillStyle = '#1b1b1b'; g.fillRect(px, py, cw - 1, chh - 1);
+      if (r){ g.strokeStyle = '#ff5252'; g.lineWidth = 1; g.beginPath(); g.moveTo(px + 3, py + 3); g.lineTo(px + cw - 4, py + chh - 4); g.moveTo(px + cw - 4, py + 3); g.lineTo(px + 3, py + chh - 4); g.stroke(); }
+    }
+    if (hm.mode === 'scan' && r && r.status !== 'done'){ g.strokeStyle = '#ffd740'; g.lineWidth = 2; g.strokeRect(px + 1, py + 1, cw - 3, chh - 3); g.lineWidth = 1; }
+  }));
+  g.fillStyle = FG;
+  g.fillText(`${hm.title} · ${kind[1]} · Z = ${z} mm · ${vals.length}/${xs.length * ys.length} cells`, L, 18);
+  g.fillText(`X ${xs[0]} … ${xs[xs.length - 1]} mm →`, L, H - B + 18);
+  g.save(); g.translate(16, T + ph); g.rotate(-Math.PI / 2); g.fillText(`Y ${ys[0]} … ${ys[ys.length - 1]} mm →`, 0, 0); g.restore();
+  const bx = W - R + 12, bw = 12;
+  for (let k = 0; k < ph; k++){ const [cr, cg, cb] = ramp(stops, 1 - k / ph); g.fillStyle = `rgb(${cr},${cg},${cb})`; g.fillRect(bx, T + k, bw, 1); }
+  g.fillStyle = FG; g.fillText(fmt(hi), bx + bw + 4, T + 9); g.fillText(fmt(lo), bx + bw + 4, T + ph);
+  g.fillText('gray: no data', bx - 6, H - 6);
+}
+$('#hmPng').onclick = () => { if (hm) savePng($('#hmCv'), `${hm.name}_${$('#hmMetric').value}_Z${$('#hmPlane').value}`); };
+$('#hmCsv').onclick = () => { if (hm && hm.rows.length) download(new Blob([toCsv(hm.rows)], {type: 'text/csv'}), `${hm.name}.csv`); };
+
+// ═════════════ status rendering ═════════════
+function setLight(name, color){
+  const el = $(`[data-light="${name}"]`), dot = el.querySelector('i');
+  dot.style.background = color || '#2a2a2a'; dot.style.boxShadow = color ? `0 0 6px ${color}` : 'none';
+  el.classList.toggle('on', !!color);
+}
+function renderDiag(){
+  if (!S || !visible($('#diagStats'))) return;
+  const d = S.daq, s = liveSamples(), n = s.length;
+  let rate = null, jit = null, gap = null;
+  if (n > 2){
+    const iv = []; for (let i = 1; i < n; i++) iv.push(s[i].elapsed_s - s[i - 1].elapsed_s);
+    const m = mean(iv); rate = (n - 1) / (s[n - 1].elapsed_s - s[0].elapsed_s);
+    jit = Math.sqrt(iv.reduce((a, v) => a + (v - m) ** 2, 0) / (iv.length - 1)) * 1000; gap = Math.max(...iv) * 1000;
+  }
+  const ovl = s.filter(p => p.status && p.status.startsWith('overload')).length;
+  const rows = [
+    ['Stream', stream.kind === 'run' ? 'recording' : stream.kind === 'monitor' ? 'live view (not saved)' : '—'],
+    ['Samples buffered', n], ['Achieved rate', rate ? rate.toFixed(3) + ' Hz' : '—'],
+    ['Interval jitter (SD)', jit != null ? jit.toFixed(2) + ' ms' : '—'], ['Largest gap', gap != null ? gap.toFixed(1) + ' ms' : '—'],
+    ['Overloaded samples', ovl], ['Last sample status', n ? s[n - 1].status : '—'],
+    ['Run state', d.run.state], ['Run samples / errors', `${d.run.index} / ${d.run.n_errors}`],
+  ];
+  $('#diagStats').innerHTML = rows.map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join('');
+  const id = d.identity || {};
+  const link = [['Connected', d.connected ? 'yes' : 'no'], ['Model', id.model || '—'], ['Serial', id.serial || '—'], ['Firmware', id.firmware || '—'],
+    ['Resource', id.resource || d.cfg.resource || '—'], ['Query latency', d.latency_ms != null ? d.latency_ms + ' ms' : '—'],
+    ['Live view', d.monitoring ? `on (${d.cfg.monitor_rate_hz} Hz)` : 'off'], ['Overload check', d.cfg.check_overload ? 'on (CUROVLDSTAT? each sample)' : 'off']];
+  $('#diagLink').innerHTML = link.map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td></tr>`).join('');
+}
+
+// ═════════════ poll ═════════════
 async function poll(){
   try {
-    S = await api('state?since=' + logSeq);
-    if (!cfgLoaded){ fillCfg(S.cfg); cfgLoaded = true; loadPorts(); schedulePreview(); renderPts(); renderHome(); }
+    S = await api(`state?since=${logSeq}&dsince=${daqLogSeq}&ssince=${sampleSeq}`);
+    const d = S.daq;
+    if (!cfgLoaded){
+      cfgLoaded = true;
+      fillCfg(S.cfg); loadPorts(); schedulePreview(); renderPts(); renderHome();
+      if (d.cfg.resource) $('#daqResource').dataset.saved = d.cfg.resource;
+      loadDaqResources(); loadControls();
+      $('#daqDataDir').value = d.cfg.data_dir;
+      $('#daqSettle').value = d.cfg.settle_s;
+      daqRate = DAQ_RATES.includes(+d.cfg.rate_hz) ? +d.cfg.rate_hz : 10;
+      segmented($('#daqRateSteps'), DAQ_RATES.map(r => [r, `${r} Hz`]), () => daqRate, v => { daqRate = +v; });
+      $('#daqLive').checked = d.cfg.monitor !== false;
+      $('#scZ').value = d.cfg.scan_z_planes || '';
+      if (d.cfg.scan_duration_s) $('#scDur').value = d.cfg.scan_duration_s;
+      let t = (location.hash.match(/tab=(\w+)/) || [])[1] || null;
+      if (!t) try { t = localStorage.getItem('tab'); } catch(e){}
+      setTab(t && $(`#tab-${t}`) ? t : 'acq');
+    }
+
+    // ---- gantry ----
     for (const a of ['X','Y','Z']) $('#d'+a).textContent = S.pos[a] === null ? '—' : S.pos[a].toFixed(3);
-    $('#connBtn').textContent = S.connected ? 'Disconnect' : 'Connect';
-    $('#connBtn').classList.toggle('pri', !S.connected);
+    $('#connBtn').textContent = S.connected ? '■ Disconnect' : '▶ Connect';
+    $('#connBtn').className = S.connected ? '' : 'go';
     const cp = $('#connPill');
     cp.textContent = S.halted ? 'HALTED: Disconnect + Connect' : S.connected ? (S.mock ? 'MOCK' : 'connected') : 'offline';
     cp.className = 'pill ' + (S.connected && !S.halted ? 'ok' : 'bad');
+    $('#estop').hidden = !S.connected;
     renderHome();
     const lp = S.last_pos, rb = $('#restoreBox'); rb.hidden = !(lp && S.connected && !S.halted);
     if (lp) $('#restoreBtn').textContent = `Restore X${lp.X.toFixed(2)} Y${lp.Y.toFixed(2)} Z${lp.Z.toFixed(2)}`;
@@ -432,20 +1412,136 @@ async function poll(){
     $('#runBtn').disabled = ['running','paused'].includes(sw.state);
     if (sw.state !== 'idle') {
       const el = sw.started ? (Date.now()/1000 - sw.started) : 0;
-      $('#sweepInfo').dataset.live = `${sw.state.toUpperCase()} · point ${Math.min(sw.index, sw.total)}/${sw.total} · ${fmtT(el)} elapsed ${sw.msg ? '· ' + sw.msg : ''}`;
-      $('#sweepErr').textContent = sw.state === 'error' ? sw.msg : $('#sweepErr').textContent;
-      $('#sweepInfo').title = $('#sweepInfo').dataset.live;
-      $('#sweepInfo').textContent = $('#sweepInfo').dataset.live;
+      $('#sweepInfo').textContent = `${sw.state.toUpperCase()} · point ${Math.min(sw.index, sw.total)}/${sw.total} · ${fmtT(el)} elapsed ${sw.msg ? '· ' + sw.msg : ''}`;
+      if (sw.state === 'error') $('#sweepErr').textContent = sw.msg;
     }
     if (S.log.length){
       const box = $('#log'), atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 20;
-      box.insertAdjacentHTML('beforeend', S.log.map(([n,d,t]) => `<div class="${d}">${d==='tx'?'› ':d==='sys'?'# ':''}${t.replace(/</g,'&lt;')}</div>`).join(''));
+      box.insertAdjacentHTML('beforeend', S.log.map(([n,dir,t]) => `<div class="${dir}">${dir==='tx'?'› ':dir==='sys'?'# ':''}${esc(t)}</div>`).join(''));
       logSeq = S.log[S.log.length-1][0];
       while (box.children.length > 1500) box.firstChild.remove();
       if (atBottom) box.scrollTop = box.scrollHeight;
     }
-    draw();
-  } catch(e) { $('#connPill').textContent = 'server down'; $('#connPill').className = 'pill bad'; }
+    if (activeTab === 'gantry') draw();
+
+    // ---- SR860 sample stream ----
+    if (d.stream.id !== stream.id) stream = {id: d.stream.id, kind: d.stream.kind, samples: []};
+    newSamples = d.samples.length > 0;
+    if (newSamples){
+      stream.samples.push(...d.samples);
+      sampleSeq = d.samples[d.samples.length - 1].i;
+      if (stream.samples.length > 6000) stream.samples.splice(0, stream.samples.length - 6000);
+    }
+    const running = isRunning(d), recording = d.run.state === 'running';
+    const sc = S.scan, scRunning = sc.state === 'running';
+
+    // ---- hardware bar ----
+    const id = d.identity;
+    $('#chipDevice').textContent = id ? `Device: ${id.model} · SN${id.serial}` : 'Device: SR860';
+    $('#chipPort').textContent = `Port: ${(id && id.resource) || $('#daqResource').value || '—'}`;
+    $('#chipPort').title = $('#chipPort').textContent;
+    $('#chipRate').textContent = `Rate: ${daqRate} Hz${d.monitoring ? ` · live ${d.cfg.monitor_rate_hz} Hz` : ''}`;
+    let health = 0, htxt = 'Offline';
+    if (d.connected){
+      health = 100; const lat = d.latency_ms;
+      if (lat > 50) health = 75; if (lat > 200) health = 45; if (d.run.n_errors) health = 20;
+      htxt = `Latency ${lat != null ? lat.toFixed(1) : '—'} ms`;
+    }
+    $('#healthTxt').textContent = htxt; $('#healthTxt').style.color = health > 60 ? '#69f0ae' : health > 30 ? '#ffd740' : '#ff5252';
+    $('#healthBar').style.width = health + '%'; $('#healthBar').style.background = health > 60 ? '#69f0ae' : health > 30 ? '#ffd740' : '#ff5252';
+    const ls = $('#linkStatus');
+    ls.textContent = !d.connected ? '● Offline' : recording ? '● Recording' : d.run.state === 'settling' ? '● Settling' : '● Online';
+    ls.className = 'status ' + (!d.connected ? 'off' : running ? 'busy' : 'on');
+    $('#daqConnBtn').disabled = d.connected; $('#daqDiscBtn').disabled = !d.connected || running;
+    $('#daqConnBtn').classList.toggle('attn', !d.connected && !!$('#daqResource').value);
+
+    // ---- status lights ----
+    const last = stream.samples[stream.samples.length - 1];
+    setLight('link', d.connected ? '#69f0ae' : null);
+    setLight('live', d.monitoring ? (newSamples ? '#448aff' : '#1e3a66') : null);
+    setLight('rec', recording ? (newSamples ? '#ff5252' : '#5c1a1a') : null);
+    setLight('settle', d.run.state === 'settling' ? '#ffd740' : null);
+    setLight('ovld', last && last.status && last.status.startsWith('overload') && d.connected ? '#ff5252' : null);
+    setLight('err', (running && d.run.n_errors) || (d.run.summary && d.run.summary.end_reason && d.run.summary.end_reason.startsWith('communication')) ? '#ff1744' : null);
+    setLight('scan', scRunning ? '#e040fb' : null);
+    setLight('gantry', S.connected ? '#69f0ae' : null);
+    $('#liveHw').textContent = last && d.connected ? `X ${si(last.x, sigUnit())}  Y ${si(last.y, sigUnit())}  R ${si(last.r, sigUnit())}  θ ${last.theta.toFixed(2)}°` : '';
+    if (Date.now() - lastAlertAt > 20000) $('#lastAlert').textContent = '';
+
+    // ---- recording bar ----
+    const rec = $('#daqRecBtn');
+    rec.textContent = running ? '■ Stop' : '● Record'; rec.classList.toggle('on', running);
+    rec.disabled = running ? false : (!d.connected || scRunning);
+    $('#daqAbortBtn').disabled = !running;
+    ['#daqDuration', '#daqSettle', '#daqCondition', '#daqRunId', '#daqNotes', '#daqDataDir', '#daqResource', '#daqResRefresh']
+      .forEach(sel => $(sel).disabled = running);   // configuration locked while recording (spec sec. 9)
+    $$('#daqRateSteps button').forEach(b => b.disabled = running);
+    $('#daqPingBtn').disabled = running || !d.connected;
+    const lim = parseHMS($('#daqDuration').value), dr = d.run;
+    if (running){
+      const el = dr.started ? Date.now() / 1000 - dr.started : 0;
+      $('#recClock').textContent = dr.state === 'settling'
+        ? `SETTLE ${Math.max(0, dr.settle_s - el).toFixed(1)} s`
+        : `${fmtHMS(el - (dr.settle_s || 0))} / ${dr.duration_s != null ? fmtHMS(dr.duration_s) : '∞'}`;
+      $('#recLogging').textContent = `Logging: CSV · JSON → ${dr.path || ''}`;
+      $('#daqRunInfo').textContent = [`${dr.state.toUpperCase()} ${dr.run_id || ''}`,
+        `${dr.index} samples · ${dr.n_errors} errors · ${dr.n_overload} overloaded`,
+        dr.last_written_utc ? `last row ${dr.last_written_utc.slice(11, 23)} UTC · ${dr.last_status} · ${dr.last_latency_ms ?? '—'} ms` : ''].filter(Boolean).join('\n');
+      $('#daqSummary').textContent = '';
+    } else {
+      $('#recClock').textContent = `00:00:00 / ${Number.isNaN(lim) ? '??' : lim ? fmtHMS(lim) : '∞'}`;
+      $('#recLogging').textContent = `Logging: CSV · JSON metadata → ${dataDir()}/`;
+      if (dr.state !== 'idle'){ $('#daqRunInfo').textContent = dr.msg; $('#daqSummary').textContent = fmtSummary(dr.summary); }
+    }
+
+    // ---- device settings panel ----
+    $('#daqIdentity').textContent = id ? `${id.model} · SN ${id.serial} · FW ${id.firmware}` : 'not connected';
+    $('#daqLatency').textContent = d.latency_ms != null ? `${d.latency_ms.toFixed(2)} ms` : '—';
+    if (document.activeElement !== $('#daqLive')) $('#daqLive').checked = d.cfg.monitor !== false;
+    const lockCtl = !d.connected || running || scRunning;
+    $$('[data-ctl],[data-setbtn],[data-action]').forEach(el => el.disabled = lockCtl);
+
+    // ---- alerts ----
+    if (d.log.length){
+      const box = $('#daqLog'), atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 20;
+      const now = new Date().toLocaleTimeString();
+      box.insertAdjacentHTML('beforeend', d.log.map(([n, dir, t]) => `<div><span class="t">${now}</span> ${esc(t)}</div>`).join(''));
+      daqLogSeq = d.log[d.log.length - 1][0];
+      while (box.children.length > 500) box.firstChild.remove();
+      if (atBottom) box.scrollTop = box.scrollHeight;
+      const lastMsg = d.log[d.log.length - 1][2];
+      $('#lastAlert').textContent = '⚑ ' + lastMsg; $('#lastAlert').title = lastMsg; lastAlertAt = Date.now();
+    }
+
+    // ---- settings: read when the link comes up and after each run ----
+    const FINAL = ['done', 'stopped', 'aborted', 'error'];
+    if (d.connected && prevConnected !== true) loadSettings();
+    if (FINAL.includes(dr.state) && daqPrevState !== null && !FINAL.includes(daqPrevState)){ loadDaqHistory(); loadSettings(); }
+    prevConnected = d.connected; daqPrevState = dr.state;
+
+    // ---- XYZ scan ----
+    $('#scStart').disabled = scRunning || !S.connected || !d.connected;
+    $('#scStop').disabled = !scRunning;
+    if (scRunning){ rec.disabled = true; $('#daqAbortBtn').disabled = true; }  // a scan's runs are ended with Stop scan
+    $('#runBtn').disabled = $('#runBtn').disabled || scRunning;
+    $('#scProg').style.width = !sc.total ? '0' : sc.state === 'done' ? '100%' : (100 * sc.index / sc.total) + '%';
+    if (sc.state !== 'idle'){
+      const el = sc.started ? Date.now() / 1000 - sc.started : 0;
+      $('#scInfo').textContent = scRunning ? `RUNNING · point ${sc.index + 1}/${sc.total} · ${sc.phase} · ${fmtT(el)} elapsed` : `${sc.state.toUpperCase()} · ${sc.msg}`;
+    }
+    if (sc.name && (sc.name !== scLastName || sc.points_done !== scLastDone)){
+      const newScan = sc.name !== scLastName;
+      scLastName = sc.name; scLastDone = sc.points_done;
+      if (!hm || newScan || (hm.mode === 'scan' && hm.name === sc.name)) openScan(sc.name);
+    }
+    if (scPrevState !== null && sc.state !== scPrevState) loadScans();
+    scPrevState = sc.state;
+
+    drawLive(); renderChannels(); renderDiag();
+  } catch(e) {
+    $('#linkStatus').textContent = '● Server down'; $('#linkStatus').className = 'status off';
+    console.error(e);
+  }
   setTimeout(poll, 300);
 }
 poll();
