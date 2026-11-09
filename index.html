@@ -14,7 +14,7 @@
   header{display:flex;gap:10px;align-items:center;padding:10px 16px;border-bottom:1px solid var(--line);flex-wrap:wrap}
   header h1{font-size:14px;letter-spacing:.08em;text-transform:uppercase;margin:0 12px 0 0;color:var(--acc)}
   .grow{flex:1}
-  main{display:grid;grid-template-columns:330px 1fr 420px;gap:12px;padding:12px;min-height:calc(100vh - 54px)}
+  main{display:grid;grid-template-columns:330px 1fr 420px;gap:12px;padding:12px;align-items:start}
   @media(max-width:1250px){main{grid-template-columns:1fr 1fr}}
   .panel{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:12px;display:flex;flex-direction:column;gap:10px}
   .panel h2{margin:0;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim)}
@@ -253,14 +253,57 @@
 
     <div class="col">
       <canvas id="daqCv" width="700" height="360"></canvas>
-      <div class="note" id="daqPlotInfo">X · Y · R (top, volts) and θ (bottom, deg) vs elapsed time</div>
+      <div class="row">
+        <span class="note" id="daqPlotInfo"><span class="ax-X">X</span> · <span class="ax-Y">Y</span> · <span style="color:var(--acc)">R</span> (top, volts) and <span style="color:var(--warn)">θ</span> (bottom, deg) vs elapsed time</span>
+        <button id="daqPng" style="flex:0 0 auto">PNG</button>
+      </div>
     </div>
 
     <div class="col">
       <h2>History</h2>
-      <div class="row"><button id="daqHistRefresh" style="flex:0 0 auto">Refresh</button><button id="daqLiveBtn" style="flex:0 0 auto" disabled>Back to live</button></div>
+      <div class="row" style="flex-wrap:wrap"><button id="daqHistRefresh" style="flex:0 0 auto">Refresh</button><button id="daqLiveBtn" style="flex:0 0 auto" disabled>Back to live</button><button id="daqSumCsv" style="flex:0 0 auto" title="One row per run: position, condition, stats">Summary CSV</button></div>
       <div class="hist" id="daqHist"></div>
+      <button id="daqCmpBtn" disabled title="Complex difference A − B of mean X/Y, with both runs overlaid">Compare A − B</button>
       <div class="note" id="daqHistInfo"></div>
+    </div>
+  </div>
+</section>
+
+<section class="panel daqwrap">
+  <h2>XYZ scan</h2>
+  <div class="daqgrid">
+    <div class="col">
+      <div class="note">XY grid, pattern, lift and safe Z come from <b>Grid sweep</b>; rate, settle, condition, notes and data folder from <b>SR860 Lock-in</b>. At each point: move → M400 → M114 check → settle → timed run.</div>
+      <label>Z planes, mm (comma-separated; blank = sweep Z)<input id="scZ" placeholder="e.g. 10, 12, 14"></label>
+      <label>Per-point duration (s)<input id="scDur" type="number" min="0.1" step="0.1" value="5"></label>
+      <label>Start at point #<input id="scStartIdx" type="number" min="0" value="0"></label>
+      <div class="note" id="scPlan"></div>
+      <div class="row">
+        <button id="scStart" class="pri">Start scan</button>
+        <button id="scStop">Stop scan</button>
+      </div>
+      <div class="bar"><i id="scProg"></i></div>
+      <div class="note" id="scInfo"></div>
+      <div class="err" id="scErr"></div>
+    </div>
+
+    <div class="col">
+      <canvas id="hmCv" width="700" height="440"></canvas>
+      <div class="row">
+        <label>Metric<select id="hmMetric"></select></label>
+        <label>Z plane<select id="hmPlane"></select></label>
+        <button id="hmPng" style="flex:0 0 auto">PNG</button>
+        <button id="hmCsv" style="flex:0 0 auto">CSV</button>
+      </div>
+      <div class="note" id="hmInfo">open a scan from the list</div>
+    </div>
+
+    <div class="col">
+      <h2>Scans</h2>
+      <div class="row"><button id="scRefresh" style="flex:0 0 auto">Refresh</button></div>
+      <div class="hist" id="scList"></div>
+      <button id="scCmpBtn" disabled title="Point-by-point complex difference A − B (e.g. A unblocked, B blocked)">Compare A − B → heatmap</button>
+      <div class="note">A − B uses ΔX, ΔY of the per-point means and |Δ| = √(ΔX²+ΔY²), not R<sub>A</sub> − R<sub>B</sub>. The result is also saved as COMPARE_*.csv in the data folder.</div>
     </div>
   </div>
 </section>
@@ -391,6 +434,7 @@ async function doPreview(){
   $('#sweepInfo').textContent = `${preview.length} points × ${p.passes} pass(es) · path ${path.toFixed(1)} mm · est. ${fmtT(est)}`;
   $('#sweepErr').textContent = r.warning ? '⚠ ' + r.warning : '';
   draw();
+  updateScanPlan();  // the scan uses this same grid
 }
 function fmtT(s){ return s < 90 ? `${s.toFixed(0)} s` : `${(s/60).toFixed(1)} min`; }
 $$('[data-s]').forEach(el => el.addEventListener('input', schedulePreview));
@@ -516,72 +560,268 @@ function fmtSummary(s){
   ].filter(Boolean).join('\n');
 }
 
+// ---------- shared helpers: downloads ----------
+const dataDir = () => $('#daqDataDir').value || 'runs';
+const qd = () => 'dir=' + encodeURIComponent(dataDir());
+function download(blob, name){
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+function toCsv(rows, cols){
+  cols = cols || Object.keys(rows[0] || {});
+  const esc = v => v == null ? '' : /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v);
+  return [cols.join(','), ...rows.map(r => cols.map(c => esc(r[c])).join(','))].join('\n') + '\n';
+}
+const savePng = (cv, name) => cv.toBlob(b => download(b, name.replace(/[^\w.-]+/g, '_') + '.png'));
+// Size the canvas backing store to its on-screen width (x devicePixelRatio) so text and lines
+// stay crisp instead of being stretched by CSS. Returns [ctx, width, height] in CSS pixels.
+function fitCanvas(cv, aspect, maxH){
+  const dpr = window.devicePixelRatio || 1, W = Math.round(cv.clientWidth || 700), H = Math.round(Math.min(W * aspect, maxH));
+  if (cv.width !== Math.round(W * dpr) || cv.height !== Math.round(H * dpr)){
+    cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr); cv.style.height = H + 'px';
+  }
+  const g = cv.getContext('2d'); g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return [g, W, H];
+}
+
 // ---------- live / history plot (shared canvas: X,Y,R volts on top, theta degrees below) ----------
-function drawDaq(samples, label){
-  const cv = $('#daqCv'), g = cv.getContext('2d'), W = cv.width, H = cv.height, pad = 36;
-  g.clearRect(0, 0, W, H);
+// sets: [{samples, label}] -- the first is solid, a second (compare overlay) is dashed.
+function drawDaq(sets, label){
+  const cv = $('#daqCv'), [g, W, H] = fitCanvas(cv, 0.42, 420), pad = 36;
+  g.fillStyle = '#0c0e10'; g.fillRect(0, 0, W, H);  // opaque, so PNG exports aren't transparent
   g.fillStyle = '#6b7480'; g.font = '11px ui-monospace,monospace';
-  if (!samples || !samples.length){ g.fillText(label || 'no samples yet', pad, H/2); return; }
+  sets = (sets || []).filter(s => s.samples && s.samples.length);
+  if (!sets.length){ g.fillText(label || 'no samples yet', pad, H/2); return; }
+  const all = sets.flatMap(s => s.samples);
   const topH = H * 0.62, botH = H - topH;
-  const es = samples.map(s => s.elapsed_s), t0 = Math.min(...es), t1 = Math.max(...es);
+  const es = all.map(s => s.elapsed_s), t0 = Math.min(...es), t1 = Math.max(...es);
   const tx = t => pad + (t - t0) / ((t1 - t0) || 1) * (W - 2*pad);
 
   function plot(y0, h, series, fmt){
-    const vals = series.flatMap(s => s.vals);
+    const vals = sets.flatMap(set => series.flatMap(s => set.samples.map(s.get)));
     const vMin = Math.min(...vals), vMax = Math.max(...vals);
     const vPad = (vMax - vMin) * 0.1 || Math.abs(vMax || 1) * 0.1 || 1;
     const ty = v => y0 + h - 6 - (v - (vMin - vPad)) / (((vMax + vPad) - (vMin - vPad)) || 1) * (h - 12);
-    g.strokeStyle = '#2a2f36'; g.strokeRect(pad, y0, W - 2*pad, h);
-    series.forEach(s => {
-      g.strokeStyle = s.color; g.lineWidth = 1.3; g.beginPath();
-      samples.forEach((p, i) => { const v = s.get(p); const x = tx(p.elapsed_s), yv = ty(v); i ? g.lineTo(x, yv) : g.moveTo(x, yv); });
+    g.strokeStyle = '#2a2f36'; g.setLineDash([]); g.strokeRect(pad, y0, W - 2*pad, h);
+    sets.forEach((set, k) => series.forEach(s => {
+      g.strokeStyle = s.color; g.lineWidth = 1.3; g.setLineDash(k ? [5, 4] : []); g.beginPath();
+      set.samples.forEach((p, i) => { const x = tx(p.elapsed_s), yv = ty(s.get(p)); i ? g.lineTo(x, yv) : g.moveTo(x, yv); });
       g.stroke();
-    });
-    g.fillStyle = '#6b7480';
+    }));
+    g.setLineDash([]); g.fillStyle = '#6b7480';
     g.fillText(`${fmt(vMin)} … ${fmt(vMax)}`, pad + 4, y0 + 12);
   }
   plot(0, topH, [
-    {color:'#ff7a59', get:p=>p.x, vals:samples.map(p=>p.x)},
-    {color:'#4fc3f7', get:p=>p.y, vals:samples.map(p=>p.y)},
-    {color:'#2ecc8f', get:p=>p.r, vals:samples.map(p=>p.r)},
+    {color:'#ff7a59', get:p=>p.x}, {color:'#4fc3f7', get:p=>p.y}, {color:'#2ecc8f', get:p=>p.r},
   ], v => v.toExponential(2));
-  plot(topH + 6, botH - 6, [
-    {color:'#f0b429', get:p=>p.theta, vals:samples.map(p=>p.theta)},
-  ], v => v.toFixed(1) + '°');
+  plot(topH + 6, botH - 6, [{color:'#f0b429', get:p=>p.theta}], v => v.toFixed(1) + '°');
   g.fillStyle = '#8b939e';
-  g.fillText(`${label || ''} · ${samples.length} pts · ${t0.toFixed(1)}–${t1.toFixed(1)} s`, pad, H - 4);
+  const names = sets.length > 1 ? `A ${sets[0].label} (solid) vs B ${sets[1].label} (dashed)` : (label || '');
+  g.fillText(`${names} · ${all.length} pts · ${t0.toFixed(1)}–${t1.toFixed(1)} s`, pad, H - 4);
 }
 
-// ---------- history ----------
+// ---------- history: open, A/B compare + overlay, exports (FR-10) ----------
+let histA = null, histB = null, daqHistSets = null;
 async function loadDaqHistory(){
-  const r = await api('daq/history?dir=' + encodeURIComponent($('#daqDataDir').value || 'runs'));
+  const r = await api('daq/history?' + qd());
   if (!r.ok){ $('#daqHistInfo').textContent = r.error || 'failed to list runs'; return; }
-  $('#daqHist').innerHTML = (r.runs || []).map(run => `<div><b title="${run.name}">${run.name}</b><button data-open="${run.name}">Open</button></div>`).join('') || '<span class="note">no runs yet</span>';
+  $('#daqHist').innerHTML = (r.runs || []).map(run => `<div><b title="${run.name}">${run.name}</b>
+    <button data-open="${run.name}">Open</button>
+    <button data-ha="${run.name}" class="${run.name===histA?'sel':''}" title="Compare: A">A</button>
+    <button data-hb="${run.name}" class="${run.name===histB?'sel':''}" title="Compare: B">B</button></div>`).join('') || '<span class="note">no runs yet</span>';
   $$('[data-open]').forEach(b => b.onclick = () => openDaqHistory(b.dataset.open));
+  $$('[data-ha]').forEach(b => b.onclick = () => { histA = b.dataset.ha; loadDaqHistory(); updateHistCmp(); });
+  $$('[data-hb]').forEach(b => b.onclick = () => { histB = b.dataset.hb; loadDaqHistory(); updateHistCmp(); });
 }
-async function openDaqHistory(name){
-  const dir = $('#daqDataDir').value || 'runs';
-  const [csvR, jsonR] = await Promise.all([
-    api(`daq/history/file?dir=${encodeURIComponent(dir)}&name=${encodeURIComponent(name)}&ext=csv`),
-    api(`daq/history/file?dir=${encodeURIComponent(dir)}&name=${encodeURIComponent(name)}&ext=json`),
-  ]);
-  if (!csvR.ok){ $('#daqHistInfo').textContent = csvR.error; return; }
+function updateHistCmp(){ $('#daqCmpBtn').disabled = !(histA && histB && histA !== histB); }
+async function fetchRun(name){
+  const n = encodeURIComponent(name);
+  const [csvR, jsonR] = await Promise.all([api(`daq/history/file?${qd()}&name=${n}&ext=csv`), api(`daq/history/file?${qd()}&name=${n}&ext=json`)]);
+  if (!csvR.ok) throw new Error(csvR.error);
   // Keep overloaded rows (real readings, just flagged); drop only failed reads, which have no values.
-  daqHistSamples = csvR.rows.filter(r => r.X_V !== '' && r.X_V != null).map(r => ({
+  const samples = csvR.rows.filter(r => r.X_V !== '' && r.X_V != null).map(r => ({
     elapsed_s: +r.elapsed_s, x: +r.X_V, y: +r.Y_V, r: +r.R_V, theta: +r.theta_deg,
   }));
-  daqHistName = name;
-  daqView = 'history';
-  $('#daqLiveBtn').disabled = false;
-  const meta = jsonR.ok ? jsonR.data : null;
-  $('#daqHistInfo').style.whiteSpace = 'pre-wrap';
-  $('#daqHistInfo').textContent = meta
-    ? `condition: ${meta.condition || '(none)'}${meta.notes ? ' · ' + meta.notes : ''}\n` + fmtSummary(meta)
-    : `${name} (no metadata: run still in progress or ended abnormally)`;
-  drawDaq(daqHistSamples, name);
+  return {samples, meta: jsonR.ok ? jsonR.data : null};
 }
+function showHistory(sets, label, info){
+  daqHistSets = sets; daqHistName = label; daqView = 'history';
+  $('#daqLiveBtn').disabled = false;
+  $('#daqHistInfo').style.whiteSpace = 'pre-wrap';
+  $('#daqHistInfo').textContent = info;
+  drawDaq(sets, label);
+}
+async function openDaqHistory(name){
+  try {
+    const {samples, meta} = await fetchRun(name);
+    showHistory([{samples, label: name}], name, meta
+      ? `condition: ${meta.condition || '(none)'}${meta.notes ? ' · ' + meta.notes : ''}\n` + fmtSummary(meta)
+      : `${name} (no metadata: run still in progress or ended abnormally)`);
+  } catch(e){ $('#daqHistInfo').textContent = String(e.message || e); }
+}
+$('#daqCmpBtn').onclick = async () => {
+  try {
+    const [a, b, d] = await Promise.all([fetchRun(histA), fetchRun(histB),
+      api(`daq/compare?${qd()}&a=${encodeURIComponent(histA)}&b=${encodeURIComponent(histB)}`)]);
+    if (!d.ok) throw new Error(d.error);
+    showHistory([{samples: a.samples, label: histA}, {samples: b.samples, label: histB}], `${histA} vs ${histB}`, [
+      `A − B  (A: ${d.condition_a || '?'}, B: ${d.condition_b || '?'})  — complex difference of mean X/Y, not R_A − R_B`,
+      `ΔX ${fmtV(d.dX_V)} V   ΔY ${fmtV(d.dY_V)} V`,
+      `|Δ| ${fmtV(d.dmag_V)} V   ∠Δ ${d.dphase_deg.toFixed(2)}°`,
+      d.same_position ? 'same stage position ✓' : `⚠ different positions: A ${JSON.stringify(d.position_a)} B ${JSON.stringify(d.position_b)}`,
+    ].join('\n'));
+  } catch(e){ $('#daqHistInfo').textContent = String(e.message || e); }
+};
+$('#daqSumCsv').onclick = async () => {
+  const r = await api('daq/history/summary?' + qd());
+  if (!r.ok) return err('#daqErr', r.error);
+  if (!r.rows.length) return err('#daqErr', 'no completed runs to summarize');
+  download(new Blob([toCsv(r.rows, r.columns)], {type:'text/csv'}), `runs_summary_${new Date().toISOString().slice(0,10)}.csv`);
+};
+$('#daqPng').onclick = () => savePng($('#daqCv'), daqView === 'live' ? `sr860_live_${Date.now()}` : daqHistName);
 $('#daqHistRefresh').onclick = loadDaqHistory;
 $('#daqLiveBtn').onclick = () => { daqView = 'live'; $('#daqLiveBtn').disabled = true; };
+
+// ---------- XYZ scan ----------
+// [field, label, color scale]: seq = min..max, div = symmetric about 0, phase = fixed -180..180
+const HM_METRICS = {
+  scan: [['mag_V','|mean X + iY| (V)','seq'], ['X_mean_V','X mean (V)','div'], ['Y_mean_V','Y mean (V)','div'],
+         ['phase_deg','phase of mean (°)','phase'], ['R_mean_V','R mean (V)','seq'], ['R_sd_V','R SD (V)','seq']],
+  compare: [['dmag_V','|Δ| = √(ΔX²+ΔY²) (V)','seq'], ['dX_V','ΔX (V)','div'], ['dY_V','ΔY (V)','div'], ['dphase_deg','∠Δ (°)','phase']],
+};
+let hm = null, scA = null, scB = null, scLastName = null, scLastDone = -1, scPrevState = null;
+
+function scanParams(){
+  return {...sweepParams(), z_planes: $('#scZ').value.trim(), duration_s: +$('#scDur').value,
+    start_index: +$('#scStartIdx').value || 0, rate_hz: daqRate, settle_s: +$('#daqSettle').value || 0,
+    condition: $('#daqCondition').value, notes: $('#daqNotes').value, data_dir: dataDir()};
+}
+let scPlanTimer;
+function updateScanPlan(){
+  clearTimeout(scPlanTimer);
+  scPlanTimer = setTimeout(async () => {
+    const p = scanParams(), r = await api('scan/preview', p), n = (r.points || []).length;
+    const per = (p.duration_s || 0) + (p.settle_s || 0) + 1;  // +~1 s per point for move + M400/M114 (rough)
+    $('#scPlan').textContent = `${n} points${n ? ` · ≈ ${fmtT(Math.max(0, n - p.start_index) * per)}` : ''}${r.warning ? ' · ⚠ ' + r.warning : ''}`;
+  }, 200);
+}
+['#scZ','#scDur','#scStartIdx','#daqSettle'].forEach(id => $(id).addEventListener('input', updateScanPlan));
+
+$('#scStart').onclick = async () => {
+  const p = scanParams(), r = await api('scan/preview', p);
+  if (r.warning) return err('#scErr', r.warning);
+  const n = r.points.length - p.start_index;
+  if (!confirm(`Scan ${n} point(s) at Z = ${p.z_planes || p.z} mm, ${p.duration_s} s each at ${p.rate_hz} Hz, condition "${p.condition || 'none'}"?\nThe stage moves between points.`)) return;
+  act('scan/start', p, '#scErr');
+};
+$('#scStop').onclick = () => act('scan/stop', {}, '#scErr');
+
+async function loadScans(){
+  const r = await api('scan/list?' + qd());
+  if (!r.ok) return;
+  $('#scList').innerHTML = r.scans.map(s => `<div><b title="${s.name}">${s.condition || 'scan'} · ${s.state} · ${s.points_done}/${s.n_points} · ${s.name.slice(5, 20)}</b>
+    <button data-sview="${s.name}">View</button>
+    <button data-sa="${s.name}" class="${s.name===scA?'sel':''}" title="Compare: A">A</button>
+    <button data-sb="${s.name}" class="${s.name===scB?'sel':''}" title="Compare: B">B</button></div>`).join('') || '<span class="note">no scans yet</span>';
+  $$('[data-sview]').forEach(b => b.onclick = () => openScan(b.dataset.sview));
+  $$('[data-sa]').forEach(b => b.onclick = () => { scA = b.dataset.sa; loadScans(); });
+  $$('[data-sb]').forEach(b => b.onclick = () => { scB = b.dataset.sb; loadScans(); });
+  $('#scCmpBtn').disabled = !(scA && scB && scA !== scB);
+}
+$('#scRefresh').onclick = loadScans;
+
+const linspace = (a, b, n) => n > 1 ? Array.from({length: n}, (_, i) => +(a + (b - a) * i / (n - 1)).toFixed(4)) : [+a];
+async function openScan(name){
+  const r = await api(`scan/read?${qd()}&name=${encodeURIComponent(name)}`);
+  if (!r.ok) return err('#scErr', r.error);
+  const m = r.meta, pr = m.params || {};
+  setHeatmap({mode: 'scan', name, rows: r.rows, title: `${m.condition || 'scan'} · ${name}`,
+    // Planned grid, so a running scan fills in a fixed grid instead of the axes growing.
+    xs: linspace(+pr.x0, +pr.x1, +pr.nx).sort((a, b) => a - b),
+    ys: linspace(+pr.y0, +pr.y1, +pr.ny).sort((a, b) => a - b),
+    planes: m.planes,
+    info: `${m.state} · ${m.points_done}/${m.n_points} points · ${m.per_point.duration_s} s @ ${m.per_point.rate_hz} Hz${m.msg ? ' · ' + m.msg : ''}`});
+}
+$('#scCmpBtn').onclick = async () => {
+  const r = await api(`scan/compare?${qd()}&a=${encodeURIComponent(scA)}&b=${encodeURIComponent(scB)}`);
+  if (!r.ok) return err('#scErr', r.error);
+  setHeatmap({mode: 'compare', name: `${scA}__minus__${scB}`, rows: r.rows,
+    title: `A − B: ${r.condition_a || 'A'} − ${r.condition_b || 'B'}`,
+    info: `${r.rows.length} matched points${r.only_in_a || r.only_in_b ? ` · unmatched: ${r.only_in_a} only in A, ${r.only_in_b} only in B` : ''} · saved ${r.file.split('/').pop()}`});
+};
+function setHeatmap(h){
+  const keepMetric = hm && hm.mode === h.mode ? $('#hmMetric').value : null, keepPlane = $('#hmPlane').value;
+  hm = h;
+  $('#hmMetric').innerHTML = HM_METRICS[h.mode].map(([k, l]) => `<option value="${k}">${l}</option>`).join('');
+  if (keepMetric) $('#hmMetric').value = keepMetric;
+  const planes = h.planes || [...new Set(h.rows.map(r => +r.z_mm))].sort((a, b) => a - b);
+  $('#hmPlane').innerHTML = planes.map(z => `<option value="${z}">${z}</option>`).join('');
+  if (planes.map(String).includes(keepPlane)) $('#hmPlane').value = keepPlane;
+  $('#hmInfo').textContent = h.info;
+  drawHeatmap();
+}
+$('#hmMetric').onchange = () => drawHeatmap();
+$('#hmPlane').onchange = () => drawHeatmap();
+
+const RAMP_SEQ = ['#440154', '#3b528b', '#21918c', '#5ec962', '#fde725'];  // viridis
+const RAMP_DIV = ['#3b4cc0', '#8db0fe', '#dddddd', '#f49a7b', '#b40426'];  // cool-warm, light at 0
+function ramp(stops, t){
+  t = Math.max(0, Math.min(1, t));
+  const s = t * (stops.length - 1), i = Math.min(Math.floor(s), stops.length - 2), f = s - i;
+  const a = parseInt(stops[i].slice(1), 16), b = parseInt(stops[i + 1].slice(1), 16);
+  const mix = sh => Math.round(((a >> sh) & 255) * (1 - f) + ((b >> sh) & 255) * f);
+  return [mix(16), mix(8), mix(0)];
+}
+function drawHeatmap(){
+  const cv = $('#hmCv'), [g, W, H] = fitCanvas(cv, 0.6, 540);
+  g.fillStyle = '#0c0e10'; g.fillRect(0, 0, W, H); g.font = '11px ui-monospace,monospace';
+  if (!hm){ g.fillStyle = '#6b7480'; g.fillText('no scan open', 20, H / 2); return; }
+  const metric = $('#hmMetric').value, kind = HM_METRICS[hm.mode].find(m => m[0] === metric), z = +$('#hmPlane').value;
+  const k3 = v => (+v).toFixed(3);
+  const rows = hm.rows.filter(r => k3(r.z_mm) === k3(z));
+  const xs = hm.xs || [...new Set(hm.rows.map(r => +r.x_mm))].sort((a, b) => a - b);
+  const ys = hm.ys || [...new Set(hm.rows.map(r => +r.y_mm))].sort((a, b) => a - b);
+  const cell = {}; rows.forEach(r => cell[k3(r.x_mm) + ',' + k3(r.y_mm)] = r);
+  const vals = rows.map(r => r[metric]).filter(v => typeof v === 'number' && isFinite(v));
+  let lo, hi, stops;
+  if (kind[2] === 'div'){ const mx = Math.max(0, ...vals.map(Math.abs)) || 1; lo = -mx; hi = mx; stops = RAMP_DIV; }
+  else if (kind[2] === 'phase'){ lo = -180; hi = 180; stops = RAMP_DIV; }
+  else { lo = vals.length ? Math.min(...vals) : 0; hi = vals.length ? Math.max(...vals) : 1; if (hi === lo) hi = lo + (Math.abs(lo) || 1); stops = RAMP_SEQ; }
+  const fmt = kind[2] === 'phase' ? (v => v.toFixed(1) + '°') : (v => v.toExponential(2));
+  const L = 56, R = 96, T = 30, B = 40, pw = W - L - R, ph = H - T - B;
+  const cw = pw / xs.length, chh = ph / ys.length;
+  xs.forEach((x, i) => ys.forEach((y, j) => {
+    const px = L + i * cw, py = T + (ys.length - 1 - j) * chh;  // +Y up, like the sweep preview
+    const r = cell[k3(x) + ',' + k3(y)], v = r ? r[metric] : null;
+    if (typeof v === 'number' && isFinite(v)){
+      const [cr, cg, cb] = ramp(stops, (v - lo) / (hi - lo));
+      g.fillStyle = `rgb(${cr},${cg},${cb})`; g.fillRect(px, py, cw - 1, chh - 1);
+      if (cw > 70 && chh > 18){
+        g.fillStyle = (0.299 * cr + 0.587 * cg + 0.114 * cb) > 140 ? '#000' : '#fff';
+        g.fillText(fmt(v), px + 4, py + chh / 2 + 4);
+      }
+    } else {
+      g.fillStyle = '#1b1f24'; g.fillRect(px, py, cw - 1, chh - 1);  // not measured (yet)
+      if (r){  // measured, but no clean value (all samples errored / overloaded)
+        g.strokeStyle = '#ef5350'; g.lineWidth = 1; g.beginPath();
+        g.moveTo(px + 3, py + 3); g.lineTo(px + cw - 4, py + chh - 4); g.moveTo(px + cw - 4, py + 3); g.lineTo(px + 3, py + chh - 4); g.stroke();
+      }
+    }
+    if (hm.mode === 'scan' && r && r.status !== 'done'){  // incomplete / aborted / error point
+      g.strokeStyle = '#f0b429'; g.lineWidth = 2; g.strokeRect(px + 1, py + 1, cw - 3, chh - 3); g.lineWidth = 1;
+    }
+  }));
+  g.fillStyle = '#8b939e';
+  g.fillText(`${hm.title} · ${kind[1]} · Z = ${z} mm · ${vals.length}/${xs.length * ys.length} cells`, L, 18);
+  g.fillText(`X ${xs[0]} … ${xs[xs.length - 1]} mm →`, L, H - B + 18);
+  g.save(); g.translate(16, T + ph); g.rotate(-Math.PI / 2); g.fillText(`Y ${ys[0]} … ${ys[ys.length - 1]} mm →`, 0, 0); g.restore();
+  const bx = W - R + 12, bw = 12;
+  for (let k = 0; k < ph; k++){ const [cr, cg, cb] = ramp(stops, 1 - k / ph); g.fillStyle = `rgb(${cr},${cg},${cb})`; g.fillRect(bx, T + k, bw, 1); }
+  g.fillStyle = '#8b939e'; g.fillText(fmt(hi), bx + bw + 4, T + 9); g.fillText(fmt(lo), bx + bw + 4, T + ph);
+  g.fillText('gray: no data', bx - 6, H - 6);
+}
+$('#hmPng').onclick = () => { if (hm) savePng($('#hmCv'), `${hm.name}_${$('#hmMetric').value}_Z${$('#hmPlane').value}`); };
+$('#hmCsv').onclick = () => { if (hm && hm.rows.length) download(new Blob([toCsv(hm.rows)], {type: 'text/csv'}), `${hm.name}.csv`); };
 
 // ---------- poll ----------
 async function poll(){
@@ -593,6 +833,9 @@ async function poll(){
       $('#daqDataDir').value = S.daq.cfg.data_dir;
       $('#daqSettle').value = S.daq.cfg.settle_s;
       setDaqRate(S.daq.cfg.rate_hz);
+      $('#scZ').value = S.daq.cfg.scan_z_planes || '';
+      if (S.daq.cfg.scan_duration_s) $('#scDur').value = S.daq.cfg.scan_duration_s;
+      loadScans();
     }
     for (const a of ['X','Y','Z']) $('#d'+a).textContent = S.pos[a] === null ? '—' : S.pos[a].toFixed(3);
     $('#connBtn').textContent = S.connected ? 'Disconnect' : 'Connect';
@@ -658,10 +901,32 @@ async function poll(){
     }
     // Live view always redraws from the server's ring buffer; a history run stays
     // pinned on screen (its own canvas call already happened) until "Back to live".
-    if (daqView === 'live') drawDaq(d.samples, running ? 'live' : (d.connected ? 'connected' : ''));
+    if (daqView === 'live') drawDaq([{samples: d.samples, label: 'live'}], running ? 'live' : (d.connected ? 'connected' : ''));
     const FINAL = ['done','stopped','aborted','error'];
     if (FINAL.includes(dr.state) && !FINAL.includes(daqPrevState)) loadDaqHistory();
     daqPrevState = dr.state;
+
+    // ---------- XYZ scan ----------
+    const sc = S.scan, scRunning = sc.state === 'running';
+    $('#scStart').disabled = scRunning || !S.connected || !d.connected;
+    $('#scStop').disabled = !scRunning;
+    $('#daqStartBtn').disabled = $('#daqStartBtn').disabled || scRunning;  // server refuses it anyway
+    $('#runBtn').disabled = $('#runBtn').disabled || scRunning;
+    $('#scProg').style.width = !sc.total ? '0' : sc.state === 'done' ? '100%' : (100 * sc.index / sc.total) + '%';
+    if (sc.state !== 'idle'){
+      const el = sc.started ? Date.now() / 1000 - sc.started : 0;
+      $('#scInfo').textContent = scRunning
+        ? `RUNNING · point ${sc.index + 1}/${sc.total} · ${sc.phase} · ${fmtT(el)} elapsed`
+        : `${sc.state.toUpperCase()} · ${sc.msg}`;
+    }
+    // Follow the scan on the heatmap as points land -- unless another scan or a compare is being looked at.
+    if (sc.name && (sc.name !== scLastName || sc.points_done !== scLastDone)){
+      const newScan = sc.name !== scLastName;
+      scLastName = sc.name; scLastDone = sc.points_done;
+      if (!hm || newScan || (hm.mode === 'scan' && hm.name === sc.name)) openScan(sc.name);
+    }
+    if (scPrevState !== null && sc.state !== scPrevState) loadScans();
+    scPrevState = sc.state;
   } catch(e) { $('#connPill').textContent = 'server down'; $('#connPill').className = 'pill bad'; }
   setTimeout(poll, 300);
 }

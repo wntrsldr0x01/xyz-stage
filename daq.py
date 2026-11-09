@@ -22,6 +22,8 @@ DEFAULT_DAQ_CONFIG = {
     "data_dir": "runs",
     "settle_s": 0.0,      # dwell after Start before the first sample is taken
     "check_overload": True,  # one extra CUROVLDSTAT? query per sample
+    "scan_z_planes": "",     # remembered scan form values (scan.py)
+    "scan_duration_s": 5.0,
 }
 
 RECENT_MAXLEN = 2000  # live-plot ring buffer: enough for a 10 Hz run's last ~3 minutes
@@ -498,7 +500,8 @@ def list_runs(data_dir):
     if not out_dir.is_dir():
         return []
     runs = []
-    for csv_path in sorted(out_dir.glob("*.csv"), key=lambda p: p.stat().st_mtime, reverse=True):
+    # AE_* only: COMPARE_*.csv results live in the same folder and aren't runs.
+    for csv_path in sorted(out_dir.glob("AE_*.csv"), key=lambda p: p.stat().st_mtime, reverse=True):
         json_path = csv_path.with_suffix(".json")
         runs.append({"name": csv_path.stem, "has_json": json_path.exists(),
                      "mtime": csv_path.stat().st_mtime, "size": csv_path.stat().st_size})
@@ -528,6 +531,39 @@ def read_run_csv(data_dir, name):
 def read_run_json(data_dir, name):
     path = _resolve_run_file(data_dir, name, "json")
     return json.loads(path.read_text())
+
+
+SUMMARY_COLUMNS = ["run", "start_utc", "condition", "notes", "x_mm", "y_mm", "z_mm", "ref_hz",
+                   "time_constant_s", "end_state", "incomplete", "n_samples", "n_errors", "n_overload",
+                   "achieved_rate_hz", "X_mean_V", "X_sd_V", "Y_mean_V", "Y_sd_V", "R_mean_V", "R_sd_V",
+                   "mag_V", "phase_deg", "stationary", "settings_changed"]
+
+
+def summarize_runs(data_dir):
+    """One row per run (from its JSON sidecar) for the summary CSV export (FR-10)."""
+    rows = []
+    for run in list_runs(data_dir):
+        if not run["has_json"]:
+            continue
+        try:
+            j = read_run_json(data_dir, run["name"])
+        except Exception:
+            continue
+        st, pos, inst = j.get("stats") or {}, j.get("position") or {}, j.get("instrument_settings") or {}
+        X, Y, R, mc = st.get("X_V", {}), st.get("Y_V", {}), st.get("R_V", {}), st.get("mean_complex", {})
+        rows.append({
+            "run": run["name"], "start_utc": j.get("start_utc"), "condition": j.get("condition"),
+            "notes": j.get("notes"), "x_mm": pos.get("X"), "y_mm": pos.get("Y"), "z_mm": pos.get("Z"),
+            "ref_hz": inst.get("ref_hz"), "time_constant_s": inst.get("time_constant_s"),
+            "end_state": j.get("end_state"), "incomplete": j.get("incomplete"),
+            "n_samples": j.get("n_samples"), "n_errors": j.get("n_errors"), "n_overload": j.get("n_overload"),
+            "achieved_rate_hz": j.get("achieved_rate_hz"),
+            "X_mean_V": X.get("mean"), "X_sd_V": X.get("sd"), "Y_mean_V": Y.get("mean"), "Y_sd_V": Y.get("sd"),
+            "R_mean_V": R.get("mean"), "R_sd_V": R.get("sd"),
+            "mag_V": mc.get("magnitude_v"), "phase_deg": mc.get("phase_deg"),
+            "stationary": j.get("stationary"), "settings_changed": ";".join(j.get("settings_changed") or []),
+        })
+    return rows
 
 
 # ---------- mock instrument ----------

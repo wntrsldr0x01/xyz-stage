@@ -48,6 +48,22 @@ cable is in the rear USB-TMC port, not the front flash-drive port.
 `python3 server.py --mock` fakes the SR860 too (a slowly rotating X/Y signal),
 for UI work away from the bench.
 
+Each run writes `runs/AE_<date>_X.._Y.._Z.._<freq>_<id>.csv` (one row per sample, flushed
+as it's taken) and a `.json` sidecar (instrument settings, start/end position, achieved
+rate and jitter, overload/error counts, summary stats).
+
+## XYZ scan
+The **XYZ scan** panel runs the Grid sweep's XY grid over one or more Z planes, using the
+SR860 panel's rate/settle/condition. Per point: move, `M400`, `M114` readback check,
+settle, timed run. Everything goes in `runs/SCAN_<date>_<time>_<condition>/`: each point's
+raw CSV + JSON, `scan_summary.csv` (one row per point) and `scan.json`. Motion commands are
+refused while a scan runs; E-stop isn't.
+
+Blocked/unblocked: record one scan per condition, mark them A and B in the scan list and
+press Compare. The difference is taken on the complex response (ΔX, ΔY of the per-point
+means, |Δ| = √(ΔX²+ΔY²)), not R_A − R_B, and saved as `runs/COMPARE_*.csv`. The run
+history has the same A/B compare for two fixed-position runs.
+
 ## Before first motion
 - **Steps/mm**: X/Y 3200 (1 mm lead screws), Z 400 (8 mm lead screws), assuming 200-step motors at
   16x microstepping. At 3200 steps/mm the board's step rate caps X/Y at ~10 mm/s, so keep XY feed
