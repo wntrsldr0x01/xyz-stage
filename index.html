@@ -51,6 +51,13 @@
   .chk{flex-direction:row;align-items:center;gap:6px} .chk input{width:auto}
   .restore{display:flex;flex-direction:column;gap:6px;border:1px solid var(--warn);border-radius:6px;padding:8px}
   .restore[hidden]{display:none}
+  .daqwrap{margin:0 12px 12px}
+  .daqgrid{display:grid;grid-template-columns:260px 1fr 260px;gap:12px}
+  @media(max-width:1250px){.daqgrid{grid-template-columns:1fr 1fr}}
+  .col{display:flex;flex-direction:column;gap:8px}
+  .hist{max-height:220px;overflow:auto;display:flex;flex-direction:column;gap:4px}
+  .hist div{display:flex;gap:6px;align-items:center;font:11px var(--mono)} .hist div b{flex:1;font-weight:400;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .hist button{padding:3px 7px;font-size:11px}
 </style>
 </head>
 <body>
@@ -209,6 +216,54 @@
     </details>
   </section>
 </main>
+
+<section class="panel daqwrap">
+  <h2>SR860 Lock-in</h2>
+  <div class="daqgrid">
+    <div class="col">
+      <select id="daqResource"></select>
+      <div class="row">
+        <button id="daqConnBtn" class="pri">Connect</button>
+        <span id="daqConnPill" class="pill">offline</span>
+      </div>
+      <div class="note" id="daqIdentity">not connected</div>
+
+      <h2>Run</h2>
+      <div class="grid2">
+        <label>Duration (s, blank=until stopped)<input id="daqDuration" type="number" min="0" placeholder="60"></label>
+        <label>Settle (s)<input id="daqSettle" type="number" min="0" step="0.1" value="0"></label>
+      </div>
+      <label>Rate
+        <div class="steps" id="daqRateSteps"></div>
+      </label>
+      <label>Condition
+        <select id="daqCondition"><option value="">(none)</option><option>unblocked</option><option>blocked</option><option>control</option></select>
+      </label>
+      <label>Notes<input id="daqNotes" placeholder="operator notes"></label>
+      <label>Data folder<input id="daqDataDir" value="runs"></label>
+      <div class="row">
+        <button id="daqStartBtn" class="pri">Start</button>
+        <button id="daqStopBtn" title="End now, close files cleanly">Stop</button>
+        <button id="daqAbortBtn" class="danger" title="End now and mark the run aborted (data already written is kept)">Abort</button>
+      </div>
+      <div class="note" id="daqRunInfo"></div>
+      <div class="note" id="daqSummary" style="white-space:pre-wrap;font-family:var(--mono)"></div>
+      <div class="err" id="daqErr"></div>
+    </div>
+
+    <div class="col">
+      <canvas id="daqCv" width="700" height="360"></canvas>
+      <div class="note" id="daqPlotInfo">X · Y · R (top, volts) and θ (bottom, deg) vs elapsed time</div>
+    </div>
+
+    <div class="col">
+      <h2>History</h2>
+      <div class="row"><button id="daqHistRefresh" style="flex:0 0 auto">Refresh</button><button id="daqLiveBtn" style="flex:0 0 auto" disabled>Back to live</button></div>
+      <div class="hist" id="daqHist"></div>
+      <div class="note" id="daqHistInfo"></div>
+    </div>
+  </div>
+</section>
 
 <script>
 const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
@@ -410,11 +465,135 @@ $('#calBtn').onclick = () => {
   $('#calOut').textContent = `${ax}: ${cur} → ${nv.toFixed(3)} steps/mm (field updated; Save + Apply to use it)`;
 };
 
+// ---------- SR860 lock-in ----------
+const DAQ_RATES = [1, 2, 5, 10];
+let daqRate = 5, daqView = 'live', daqHistSamples = null, daqHistName = '', daqPrevState = 'idle', daqLogSeq = 0;
+$('#daqRateSteps').innerHTML = DAQ_RATES.map(r => `<button data-rate="${r}">${r} Hz</button>`).join('');
+function setDaqRate(r){ daqRate = r; $$('[data-rate]').forEach(b => b.classList.toggle('sel', +b.dataset.rate === r)); }
+$$('[data-rate]').forEach(b => b.onclick = () => setDaqRate(+b.dataset.rate)); setDaqRate(5);
+
+async function loadDaqResources(){
+  const {resources} = await api('daq/resources');
+  const sel = $('#daqResource'); const cur = sel.value;
+  sel.innerHTML = resources.map(r => `<option ${r===cur?'selected':''}>${r}</option>`).join('') || '<option value="mock://bench">mock://bench (no VISA resources found)</option>';
+}
+$('#daqConnBtn').onclick = async () => {
+  if (S?.daq?.connected) return act('daq/disconnect', {}, '#daqErr');
+  $('#daqConnBtn').disabled = true; $('#daqConnBtn').textContent = 'Connecting…';
+  await act('daq/connect', {resource: $('#daqResource').value}, '#daqErr');
+  $('#daqConnBtn').disabled = false;
+};
+$('#daqStartBtn').onclick = () => {
+  const dur = $('#daqDuration').value;
+  act('daq/run/start', {
+    duration_s: dur === '' ? null : +dur,
+    rate_hz: daqRate,
+    settle_s: +$('#daqSettle').value || 0,
+    condition: $('#daqCondition').value,
+    notes: $('#daqNotes').value,
+    data_dir: $('#daqDataDir').value || 'runs',
+  }, '#daqErr');
+};
+$('#daqStopBtn').onclick = () => act('daq/run/stop', {}, '#daqErr');
+$('#daqAbortBtn').onclick = () => { if (confirm('Abort this run? It will be marked aborted/incomplete; data already written is kept.')) act('daq/run/abort', {}, '#daqErr'); };
+
+const fmtV = v => v == null ? '—' : v.toExponential(3);
+function fmtSummary(s){
+  if (!s) return '';
+  const st = s.stats || {}, X = st.X_V, Y = st.Y_V, R = st.R_V, mc = st.mean_complex;
+  return [
+    `${(s.end_state || '?').toUpperCase()}${s.incomplete ? ' (incomplete)' : ''} · ${s.duration_s}s`,
+    `samples ${s.n_samples} · errors ${s.n_errors} · overloaded ${s.n_overload}`,
+    `rate ${s.achieved_rate_hz ?? '—'} Hz (target ${s.target_rate_hz}) · jitter sd ${s.interval_sd_ms ?? '—'} ms, max gap ${s.interval_max_ms ?? '—'} ms`,
+    `USB latency mean ${s.latency_mean_ms ?? '—'} ms, max ${s.latency_max_ms ?? '—'} ms`,
+    X ? `X ${fmtV(X.mean)} ± ${fmtV(X.sd)} V  [${fmtV(X.min)}, ${fmtV(X.max)}]` : 'no clean samples for stats',
+    Y ? `Y ${fmtV(Y.mean)} ± ${fmtV(Y.sd)} V  [${fmtV(Y.min)}, ${fmtV(Y.max)}]` : '',
+    R ? `R ${fmtV(R.mean)} ± ${fmtV(R.sd)} V  [${fmtV(R.min)}, ${fmtV(R.max)}]` : '',
+    mc ? `mean complex |${fmtV(mc.magnitude_v)}| V ∠ ${mc.phase_deg.toFixed(2)}°` : '',
+    s.stationary === false ? '⚠ stage moved during run' : '',
+    s.settings_changed && s.settings_changed.length ? `⚠ settings changed: ${s.settings_changed.join(', ')}` : '',
+    s.file,
+  ].filter(Boolean).join('\n');
+}
+
+// ---------- live / history plot (shared canvas: X,Y,R volts on top, theta degrees below) ----------
+function drawDaq(samples, label){
+  const cv = $('#daqCv'), g = cv.getContext('2d'), W = cv.width, H = cv.height, pad = 36;
+  g.clearRect(0, 0, W, H);
+  g.fillStyle = '#6b7480'; g.font = '11px ui-monospace,monospace';
+  if (!samples || !samples.length){ g.fillText(label || 'no samples yet', pad, H/2); return; }
+  const topH = H * 0.62, botH = H - topH;
+  const es = samples.map(s => s.elapsed_s), t0 = Math.min(...es), t1 = Math.max(...es);
+  const tx = t => pad + (t - t0) / ((t1 - t0) || 1) * (W - 2*pad);
+
+  function plot(y0, h, series, fmt){
+    const vals = series.flatMap(s => s.vals);
+    const vMin = Math.min(...vals), vMax = Math.max(...vals);
+    const vPad = (vMax - vMin) * 0.1 || Math.abs(vMax || 1) * 0.1 || 1;
+    const ty = v => y0 + h - 6 - (v - (vMin - vPad)) / (((vMax + vPad) - (vMin - vPad)) || 1) * (h - 12);
+    g.strokeStyle = '#2a2f36'; g.strokeRect(pad, y0, W - 2*pad, h);
+    series.forEach(s => {
+      g.strokeStyle = s.color; g.lineWidth = 1.3; g.beginPath();
+      samples.forEach((p, i) => { const v = s.get(p); const x = tx(p.elapsed_s), yv = ty(v); i ? g.lineTo(x, yv) : g.moveTo(x, yv); });
+      g.stroke();
+    });
+    g.fillStyle = '#6b7480';
+    g.fillText(`${fmt(vMin)} … ${fmt(vMax)}`, pad + 4, y0 + 12);
+  }
+  plot(0, topH, [
+    {color:'#ff7a59', get:p=>p.x, vals:samples.map(p=>p.x)},
+    {color:'#4fc3f7', get:p=>p.y, vals:samples.map(p=>p.y)},
+    {color:'#2ecc8f', get:p=>p.r, vals:samples.map(p=>p.r)},
+  ], v => v.toExponential(2));
+  plot(topH + 6, botH - 6, [
+    {color:'#f0b429', get:p=>p.theta, vals:samples.map(p=>p.theta)},
+  ], v => v.toFixed(1) + '°');
+  g.fillStyle = '#8b939e';
+  g.fillText(`${label || ''} · ${samples.length} pts · ${t0.toFixed(1)}–${t1.toFixed(1)} s`, pad, H - 4);
+}
+
+// ---------- history ----------
+async function loadDaqHistory(){
+  const r = await api('daq/history?dir=' + encodeURIComponent($('#daqDataDir').value || 'runs'));
+  if (!r.ok){ $('#daqHistInfo').textContent = r.error || 'failed to list runs'; return; }
+  $('#daqHist').innerHTML = (r.runs || []).map(run => `<div><b title="${run.name}">${run.name}</b><button data-open="${run.name}">Open</button></div>`).join('') || '<span class="note">no runs yet</span>';
+  $$('[data-open]').forEach(b => b.onclick = () => openDaqHistory(b.dataset.open));
+}
+async function openDaqHistory(name){
+  const dir = $('#daqDataDir').value || 'runs';
+  const [csvR, jsonR] = await Promise.all([
+    api(`daq/history/file?dir=${encodeURIComponent(dir)}&name=${encodeURIComponent(name)}&ext=csv`),
+    api(`daq/history/file?dir=${encodeURIComponent(dir)}&name=${encodeURIComponent(name)}&ext=json`),
+  ]);
+  if (!csvR.ok){ $('#daqHistInfo').textContent = csvR.error; return; }
+  // Keep overloaded rows (real readings, just flagged); drop only failed reads, which have no values.
+  daqHistSamples = csvR.rows.filter(r => r.X_V !== '' && r.X_V != null).map(r => ({
+    elapsed_s: +r.elapsed_s, x: +r.X_V, y: +r.Y_V, r: +r.R_V, theta: +r.theta_deg,
+  }));
+  daqHistName = name;
+  daqView = 'history';
+  $('#daqLiveBtn').disabled = false;
+  const meta = jsonR.ok ? jsonR.data : null;
+  $('#daqHistInfo').style.whiteSpace = 'pre-wrap';
+  $('#daqHistInfo').textContent = meta
+    ? `condition: ${meta.condition || '(none)'}${meta.notes ? ' · ' + meta.notes : ''}\n` + fmtSummary(meta)
+    : `${name} (no metadata: run still in progress or ended abnormally)`;
+  drawDaq(daqHistSamples, name);
+}
+$('#daqHistRefresh').onclick = loadDaqHistory;
+$('#daqLiveBtn').onclick = () => { daqView = 'live'; $('#daqLiveBtn').disabled = true; };
+
 // ---------- poll ----------
 async function poll(){
   try {
-    S = await api('state?since=' + logSeq);
-    if (!cfgLoaded){ fillCfg(S.cfg); cfgLoaded = true; loadPorts(); schedulePreview(); renderPts(); renderHome(); }
+    S = await api('state?since=' + logSeq + '&dsince=' + daqLogSeq);
+    if (!cfgLoaded){
+      fillCfg(S.cfg); cfgLoaded = true; loadPorts(); schedulePreview(); renderPts(); renderHome();
+      loadDaqResources(); loadDaqHistory();
+      $('#daqDataDir').value = S.daq.cfg.data_dir;
+      $('#daqSettle').value = S.daq.cfg.settle_s;
+      setDaqRate(S.daq.cfg.rate_hz);
+    }
     for (const a of ['X','Y','Z']) $('#d'+a).textContent = S.pos[a] === null ? '—' : S.pos[a].toFixed(3);
     $('#connBtn').textContent = S.connected ? 'Disconnect' : 'Connect';
     $('#connBtn').classList.toggle('pri', !S.connected);
@@ -445,6 +624,44 @@ async function poll(){
       if (atBottom) box.scrollTop = box.scrollHeight;
     }
     draw();
+
+    // ---------- SR860 lock-in ----------
+    const d = S.daq;
+    $('#daqConnBtn').textContent = d.connected ? 'Disconnect' : 'Connect';
+    $('#daqConnBtn').classList.toggle('pri', !d.connected);
+    const dcp = $('#daqConnPill');
+    dcp.textContent = d.connected ? (d.mock ? 'MOCK' : 'connected') : 'offline';
+    dcp.className = 'pill ' + (d.connected ? 'ok' : 'bad');
+    $('#daqIdentity').textContent = d.identity ? `${d.identity.model} SN${d.identity.serial} FW${d.identity.firmware} @ ${d.identity.resource}` : 'not connected';
+    const dr = d.run;
+    const running = ['running', 'settling'].includes(dr.state);
+    $('#daqStartBtn').disabled = running || !d.connected;
+    $('#daqStopBtn').disabled = !running;
+    $('#daqAbortBtn').disabled = !running;
+    if (running){
+      const el = dr.started ? (Date.now()/1000 - dr.started) : 0;
+      const tgt = dr.duration_s != null ? ` / ${dr.duration_s}s` : ' (until stopped)';
+      $('#daqRunInfo').textContent = `${dr.state.toUpperCase()} · ${dr.index} samples` +
+        `${dr.n_errors ? ` · ${dr.n_errors} errors` : ''}${dr.n_overload ? ` · ${dr.n_overload} OVERLOADED` : ''}` +
+        ` · ${el.toFixed(1)}s${tgt}`;
+      $('#daqSummary').textContent = '';
+    } else if (dr.state !== 'idle'){
+      $('#daqRunInfo').textContent = dr.msg;
+      $('#daqSummary').textContent = fmtSummary(dr.summary);
+    }
+    // DAQ messages (failed reads, overload/settings/stage warnings, refusals) share the terminal pane.
+    if (d.log.length){
+      const box = $('#log'), atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 20;
+      box.insertAdjacentHTML('beforeend', d.log.map(([n,dir,t]) => `<div class="sys"># SR860 ${t.replace(/</g,'&lt;')}</div>`).join(''));
+      daqLogSeq = d.log[d.log.length-1][0];
+      if (atBottom) box.scrollTop = box.scrollHeight;
+    }
+    // Live view always redraws from the server's ring buffer; a history run stays
+    // pinned on screen (its own canvas call already happened) until "Back to live".
+    if (daqView === 'live') drawDaq(d.samples, running ? 'live' : (d.connected ? 'connected' : ''));
+    const FINAL = ['done','stopped','aborted','error'];
+    if (FINAL.includes(dr.state) && !FINAL.includes(daqPrevState)) loadDaqHistory();
+    daqPrevState = dr.state;
   } catch(e) { $('#connPill').textContent = 'server down'; $('#connPill').className = 'pill bad'; }
   setTimeout(poll, 300);
 }

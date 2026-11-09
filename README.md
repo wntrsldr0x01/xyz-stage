@@ -31,6 +31,23 @@ firmware/build_and_flash.sh
 This downloads Marlin, applies `configure_marlin.py`, builds, backs up the stock flash + EEPROM to
 `~/marlin-gantry/stock_*.hex` (first run only) and flashes. It prints the restore command at the end.
 
+## SR860 lock-in (USB-TMC)
+Connect the SR860's **rear-panel** USB computer interface (not the front-panel
+flash-drive port) to the laptop. `requirements.txt` installs the official
+`srsinst.sr860` driver plus `pyvisa`/`pyvisa-py`/`pyusb` as the VISA backend --
+no NI-VISA install needed, but `pyusb` needs the `libusb` system library:
+```
+brew install libusb
+```
+With the SR860 powered on and connected, open the console, pick the resource
+from the dropdown in the **SR860 Lock-in** panel (it should look like
+`USB0::0x...::0x...::<serial>::INSTR`) and press Connect. If the dropdown is
+empty, the instrument isn't enumerating as a VISA-TMC device yet -- check the
+cable is in the rear USB-TMC port, not the front flash-drive port.
+
+`python3 server.py --mock` fakes the SR860 too (a slowly rotating X/Y signal),
+for UI work away from the bench.
+
 ## Before first motion
 - **Steps/mm**: X/Y 3200 (1 mm lead screws), Z 400 (8 mm lead screws), assuming 200-step motors at
   16x microstepping. At 3200 steps/mm the board's step rate caps X/Y at ~10 mm/s, so keep XY feed

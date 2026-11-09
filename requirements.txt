@@ -1,1 +1,13 @@
 pyserial>=3.5
+
+# SR860 lock-in over USB-TMC. srsinst.sr860 pulls in the driver only (numpy,
+# python-vxi11, srsgui) -- deliberately not the [full] extra, which adds
+# PySide6 + matplotlib for the official GUI we don't use.
+srsinst.sr860>=0.3.2
+pyvisa>=1.14
+
+# VISA backend. pyvisa-py + pyusb avoids needing NI-VISA (which has poor
+# macOS support, especially on Apple Silicon). Also needs the libusb system
+# library: `brew install libusb`.
+pyvisa-py>=0.7
+pyusb>=1.2
