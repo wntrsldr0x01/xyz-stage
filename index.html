@@ -52,6 +52,10 @@
   .restore{display:flex;flex-direction:column;gap:6px;border:1px solid var(--warn);border-radius:6px;padding:8px}
   .restore[hidden]{display:none}
   .daqwrap{margin:0 12px 12px}
+  body.nogantry main, body.nogantry #scanPanel{display:none}
+  body.nogantry #daqPanel{margin-top:12px}
+  #daqLog{height:120px;overflow:auto;background:#0c0e10;border:1px solid var(--line);border-radius:6px;padding:6px;font:11px/1.5 var(--mono);white-space:pre-wrap;color:var(--warn)}
+  #daqLog .t{color:var(--dim)}
   .daqgrid{display:grid;grid-template-columns:260px 1fr 260px;gap:12px}
   @media(max-width:1250px){.daqgrid{grid-template-columns:1fr 1fr}}
   .col{display:flex;flex-direction:column;gap:8px}
@@ -70,6 +74,7 @@
   <span id="refPill" class="pill warn">not referenced</span>
   <span id="busyPill" class="pill">idle</span>
   <span class="grow"></span>
+  <button id="gantryToggle" title="Show/hide the gantry jog, sweep and scan panels (remembered in this browser)">Hide gantry panels</button>
   <button class="danger" id="estop" title="M112. Marlin 1.1 processes it after the current command; the power switch is the real e-stop.">E-STOP (M112)</button>
 </header>
 
@@ -217,14 +222,15 @@
   </section>
 </main>
 
-<section class="panel daqwrap">
+<section class="panel daqwrap" id="daqPanel">
   <h2>SR860 Lock-in</h2>
   <div class="daqgrid">
     <div class="col">
-      <select id="daqResource"></select>
+      <div class="row"><select id="daqResource"></select><button id="daqResRefresh" style="flex:0 0 auto" title="Re-scan VISA resources">↻</button></div>
       <div class="row">
         <button id="daqConnBtn" class="pri">Connect</button>
-        <span id="daqConnPill" class="pill">offline</span>
+        <button id="daqPingBtn" style="flex:0 0 auto" title="One *IDN? round trip: checks the link and measures latency">Ping</button>
+        <span id="daqConnPill" class="pill" style="flex:0 0 auto">offline</span>
       </div>
       <div class="note" id="daqIdentity">not connected</div>
 
@@ -236,9 +242,12 @@
       <label>Rate
         <div class="steps" id="daqRateSteps"></div>
       </label>
-      <label>Condition
-        <select id="daqCondition"><option value="">(none)</option><option>unblocked</option><option>blocked</option><option>control</option></select>
-      </label>
+      <div class="grid2">
+        <label>Condition
+          <select id="daqCondition"><option value="">(none)</option><option>unblocked</option><option>blocked</option><option>control</option></select>
+        </label>
+        <label>Run ID (optional)<input id="daqRunId" placeholder="e.g. Run01"></label>
+      </div>
       <label>Notes<input id="daqNotes" placeholder="operator notes"></label>
       <label>Data folder<input id="daqDataDir" value="runs"></label>
       <div class="row">
@@ -257,6 +266,8 @@
         <span class="note" id="daqPlotInfo"><span class="ax-X">X</span> · <span class="ax-Y">Y</span> · <span style="color:var(--acc)">R</span> (top, volts) and <span style="color:var(--warn)">θ</span> (bottom, deg) vs elapsed time</span>
         <button id="daqPng" style="flex:0 0 auto">PNG</button>
       </div>
+      <h2>SR860 alerts</h2>
+      <div id="daqLog"></div>
     </div>
 
     <div class="col">
@@ -269,7 +280,7 @@
   </div>
 </section>
 
-<section class="panel daqwrap">
+<section class="panel daqwrap" id="scanPanel">
   <h2>XYZ scan</h2>
   <div class="daqgrid">
     <div class="col">
@@ -518,9 +529,13 @@ $$('[data-rate]').forEach(b => b.onclick = () => setDaqRate(+b.dataset.rate)); s
 
 async function loadDaqResources(){
   const {resources} = await api('daq/resources');
-  const sel = $('#daqResource'); const cur = sel.value;
-  sel.innerHTML = resources.map(r => `<option ${r===cur?'selected':''}>${r}</option>`).join('') || '<option value="mock://bench">mock://bench (no VISA resources found)</option>';
+  const sel = $('#daqResource'), want = sel.value || sel.dataset.saved;
+  const none = S && S.daq && S.daq.mock
+    ? '<option value="mock://bench">mock://bench (simulated SR860)</option>'
+    : '<option value="">no VISA resources found: check the rear-panel USB cable, then ↻</option>';
+  sel.innerHTML = resources.map(r => `<option ${r===want?'selected':''}>${r}</option>`).join('') || none;
 }
+$('#daqResRefresh').onclick = loadDaqResources;
 $('#daqConnBtn').onclick = async () => {
   if (S?.daq?.connected) return act('daq/disconnect', {}, '#daqErr');
   $('#daqConnBtn').disabled = true; $('#daqConnBtn').textContent = 'Connecting…';
@@ -535,9 +550,24 @@ $('#daqStartBtn').onclick = () => {
     settle_s: +$('#daqSettle').value || 0,
     condition: $('#daqCondition').value,
     notes: $('#daqNotes').value,
+    run_id: $('#daqRunId').value.trim(),
     data_dir: $('#daqDataDir').value || 'runs',
   }, '#daqErr');
 };
+$('#daqPingBtn').onclick = async () => {
+  const r = await act('daq/ping', {}, '#daqErr');
+  if (r && r.ok) err('#daqErr', '');
+};
+
+// ---------- gantry panels: hidden by default when no gantry is connected ----------
+function gantryPref(){ try { return localStorage.getItem('gantryPanels'); } catch(e){ return null; } }
+function setGantry(show, remember){
+  document.body.classList.toggle('nogantry', !show);
+  $('#gantryToggle').textContent = show ? 'Hide gantry panels' : 'Show gantry panels';
+  if (remember) try { localStorage.setItem('gantryPanels', show ? 'show' : 'hide'); } catch(e){}
+  if (show) { schedulePreview(); draw(); }
+}
+$('#gantryToggle').onclick = () => setGantry(document.body.classList.contains('nogantry'), true);
 $('#daqStopBtn').onclick = () => act('daq/run/stop', {}, '#daqErr');
 $('#daqAbortBtn').onclick = () => { if (confirm('Abort this run? It will be marked aborted/incomplete; data already written is kept.')) act('daq/run/abort', {}, '#daqErr'); };
 
@@ -838,6 +868,9 @@ async function poll(){
       $('#scZ').value = S.daq.cfg.scan_z_planes || '';
       if (S.daq.cfg.scan_duration_s) $('#scDur').value = S.daq.cfg.scan_duration_s;
       loadScans();
+      const gp = gantryPref();
+      setGantry(gp ? gp === 'show' : S.connected, false);
+      if (S.daq.cfg.resource) $('#daqResource').dataset.saved = S.daq.cfg.resource;
     }
     for (const a of ['X','Y','Z']) $('#d'+a).textContent = S.pos[a] === null ? '—' : S.pos[a].toFixed(3);
     $('#connBtn').textContent = S.connected ? 'Disconnect' : 'Connect';
@@ -877,28 +910,45 @@ async function poll(){
     const dcp = $('#daqConnPill');
     dcp.textContent = d.connected ? (d.mock ? 'MOCK' : 'connected') : 'offline';
     dcp.className = 'pill ' + (d.connected ? 'ok' : 'bad');
-    $('#daqIdentity').textContent = d.identity ? `${d.identity.model} SN${d.identity.serial} FW${d.identity.firmware} @ ${d.identity.resource}` : 'not connected';
+    $('#daqIdentity').textContent = d.identity
+      ? `${d.identity.model} SN${d.identity.serial} FW${d.identity.firmware} @ ${d.identity.resource}` +
+        (d.latency_ms != null ? ` · query latency ${d.latency_ms} ms` : '')
+      : 'not connected';
     const dr = d.run;
     const running = ['running', 'settling'].includes(dr.state);
     $('#daqStartBtn').disabled = running || !d.connected;
     $('#daqStopBtn').disabled = !running;
     $('#daqAbortBtn').disabled = !running;
+    $('#daqPingBtn').disabled = running || !d.connected;
+    // Lock the run configuration while recording (spec sec. 9 step 4).
+    ['#daqDuration', '#daqSettle', '#daqCondition', '#daqRunId', '#daqNotes', '#daqDataDir', '#daqResource', '#daqResRefresh']
+      .forEach(id => $(id).disabled = running);
+    $$('[data-rate]').forEach(b => b.disabled = running);
+    $('#daqConnBtn').disabled = running && d.connected;
     if (running){
       const el = dr.started ? (Date.now()/1000 - dr.started) : 0;
-      const tgt = dr.duration_s != null ? ` / ${dr.duration_s}s` : ' (until stopped)';
-      $('#daqRunInfo').textContent = `${dr.state.toUpperCase()} · ${dr.index} samples` +
-        `${dr.n_errors ? ` · ${dr.n_errors} errors` : ''}${dr.n_overload ? ` · ${dr.n_overload} OVERLOADED` : ''}` +
-        ` · ${el.toFixed(1)}s${tgt}`;
+      let timing;
+      if (dr.state === 'settling') timing = `settling ${Math.max(0, dr.settle_s - el).toFixed(1)} s`;
+      else if (dr.duration_s != null) timing = `${el.toFixed(1)} s elapsed · ${Math.max(0, dr.duration_s + (dr.settle_s || 0) - el).toFixed(1)} s remaining`;
+      else timing = `${el.toFixed(1)} s elapsed (until stopped)`;
+      $('#daqRunInfo').textContent = [
+        `${dr.state.toUpperCase()} ${dr.run_id || ''} · ${dr.index} samples` +
+          `${dr.n_errors ? ` · ${dr.n_errors} errors` : ''}${dr.n_overload ? ` · ${dr.n_overload} OVERLOADED` : ''} · ${timing}`,
+        dr.last_written_utc ? `last row written ${dr.last_written_utc.slice(11, 23)} UTC · status ${dr.last_status} · latency ${dr.last_latency_ms ?? '—'} ms` : '',
+      ].filter(Boolean).join('\n');
+      $('#daqRunInfo').style.whiteSpace = 'pre-wrap';
       $('#daqSummary').textContent = '';
     } else if (dr.state !== 'idle'){
       $('#daqRunInfo').textContent = dr.msg;
       $('#daqSummary').textContent = fmtSummary(dr.summary);
     }
-    // DAQ messages (failed reads, overload/settings/stage warnings, refusals) share the terminal pane.
+    // SR860 alerts (failed reads, overload/settings/stage warnings, refusals, link recovery).
     if (d.log.length){
-      const box = $('#log'), atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 20;
-      box.insertAdjacentHTML('beforeend', d.log.map(([n,dir,t]) => `<div class="sys"># SR860 ${t.replace(/</g,'&lt;')}</div>`).join(''));
-      daqLogSeq = d.log[d.log.length-1][0];
+      const box = $('#daqLog'), atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 20;
+      const now = new Date().toLocaleTimeString();
+      box.insertAdjacentHTML('beforeend', d.log.map(([n, dir, t]) => `<div><span class="t">${now}</span> ${t.replace(/</g, '&lt;')}</div>`).join(''));
+      daqLogSeq = d.log[d.log.length - 1][0];
+      while (box.children.length > 500) box.firstChild.remove();
       if (atBottom) box.scrollTop = box.scrollHeight;
     }
     // Live view always redraws from the server's ring buffer; a history run stays

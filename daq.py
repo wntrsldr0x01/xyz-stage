@@ -64,6 +64,7 @@ class Lockin:
         self._position_fn = position_fn or (lambda: {"X": None, "Y": None, "Z": None})
         self.inst = None
         self.identity = None  # {"model", "serial", "firmware", "resource"}
+        self.latency_ms = None  # last measured query round trip (ping or sample)
         self.lock = threading.Lock()  # guards log and _recent (read by HTTP threads, written by the run)
         self.log = []
         self.seq = 0
@@ -113,7 +114,27 @@ class Lockin:
         self.identity = {"model": model, "serial": serial, "firmware": firmware, "resource": resource}
         self.cfg["resource"] = resource
         self._log("sys", f"connected {model} SN{serial} FW{firmware} @ {resource}")
+        self.ping()
         return True
+
+    def ping(self):
+        """One *IDN? round trip: confirms the link and measures query latency (spec sec. 7
+        connection panel). Refused during a run -- the run's own per-sample latency is
+        shown then, and the run thread owns the session."""
+        if not self.connected:
+            return {"ok": False, "error": "not connected"}
+        if self.run["state"] in ("running", "settling"):
+            return {"ok": False, "error": "a run is in progress (its sample latency is shown instead)"}
+        t0 = time.monotonic()
+        try:
+            model, _, _ = self.inst.check_id()
+            if model is None:
+                raise LinkError("malformed *IDN? reply")
+        except Exception as e:
+            self._drop_link(f"ping: {type(e).__name__}: {e}")
+            return {"ok": False, "error": f"no answer from the SR860 ({e}); press Connect to recover"}
+        self.latency_ms = (time.monotonic() - t0) * 1000.0
+        return {"ok": True, "latency_ms": round(self.latency_ms, 2)}
 
     def disconnect(self):
         # Join the worker before closing the instrument handle: closing a VISA
@@ -278,7 +299,9 @@ class Lockin:
         if xy_mods:
             self._log("sys", f"WARNING: SR860 output settings modify the recorded X/Y: {', '.join(xy_mods)}")
         pos = self.position_fn()
-        run_id = run_id or time.strftime("Run%H%M%S")
+        # run_id lands in the filename: keep it to safe characters so it can't add path
+        # separators or "..", i.e. can't write outside data_dir.
+        run_id = re.sub(r"[^A-Za-z0-9_-]+", "-", str(run_id or "")).strip("-") or time.strftime("Run%H%M%S")
         out_dir = Path(data_dir)
         out_dir.mkdir(parents=True, exist_ok=True)
         # Filenames carry position + frequency per spec section 8, so a run is
@@ -295,9 +318,9 @@ class Lockin:
         self._run_abort.clear()
         with self.lock:
             self._recent.clear()
-        self.run = {"state": "settling" if settle_s > 0 else "running", "index": 0, "n_errors": 0,
-                    "n_overload": 0, "started": time.time(), "duration_s": duration_s,
-                    "rate_hz": rate_hz, "path": str(csv_path), "msg": "", "summary": None}
+        self.run = {**_idle_run(), "state": "settling" if settle_s > 0 else "running",
+                    "started": time.time(), "settle_s": settle_s, "duration_s": duration_s,
+                    "rate_hz": rate_hz, "run_id": run_id, "path": str(csv_path)}
         self._run_thread = threading.Thread(
             target=self._run_worker,
             args=(duration_s, rate_hz, csv_path, json_path, meta, pos, condition, notes, settle_s),
@@ -377,6 +400,11 @@ class Lockin:
                     self.run["index"] = n_ok + n_err
                     self.run["n_errors"] = n_err
                     self.run["n_overload"] = n_ovld
+                    self.run["last_status"] = status
+                    self.run["last_written_utc"] = datetime.now(timezone.utc).isoformat(timespec="milliseconds")
+                    if latency_ms != "":
+                        self.run["last_latency_ms"] = round(latency_ms, 2)
+                        self.latency_ms = latency_ms
                     if comm_error:
                         break
                     next_tick += interval
@@ -489,12 +517,15 @@ class Lockin:
             # this keeps the /api/state payload bounded even on a long run.
             samples = list(self._recent)[-n_samples:]
         return {"connected": self.connected, "mock": self.mock, "identity": self.identity,
+                "latency_ms": None if self.latency_ms is None else round(self.latency_ms, 2),
                 "run": dict(self.run), "samples": samples, "log": log, "cfg": self.cfg}
 
 
 def _idle_run():
     return {"state": "idle", "index": 0, "n_errors": 0, "n_overload": 0, "started": None,
-            "duration_s": None, "rate_hz": None, "path": None, "msg": "", "summary": None}
+            "settle_s": 0, "duration_s": None, "rate_hz": None, "run_id": None, "path": None,
+            "msg": "", "summary": None, "last_status": None, "last_written_utc": None,
+            "last_latency_ms": None}
 
 
 def _fmt_coord(v):

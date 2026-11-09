@@ -748,6 +748,8 @@ def make_handler(m: Machine, lk: daq.Lockin, sc: scan.Scanner):
                     r = lk.stop_run()
                 elif route == "daq/run/abort":
                     r = lk.abort_run()
+                elif route == "daq/ping":
+                    r = lk.ping()
                 elif route == "daq/config":
                     for k, v in data.items():
                         if k in daq.DEFAULT_DAQ_CONFIG:  # known keys only; config.json is shared with the gantry
