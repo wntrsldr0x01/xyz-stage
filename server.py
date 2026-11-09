@@ -588,7 +588,7 @@ def list_ports():
 # Anything that moves the stage, re-references it, resets the board or starts another
 # acquisition would corrupt a scan in progress. E-stop and disconnects stay allowed.
 BLOCKED_DURING_SCAN = {"connect", "send", "jog", "goto", "goto_safe", "zero", "restore", "home/go",
-                       "sweep/start", "daq/connect", "daq/run/start"}
+                       "sweep/start", "daq/connect", "daq/run/start", "daq/set", "daq/action"}
 
 
 def make_handler(m: Machine, lk: daq.Lockin, sc: scan.Scanner):
@@ -618,11 +618,15 @@ def make_handler(m: Machine, lk: daq.Lockin, sc: scan.Scanner):
                 since = int(q.get("since", [0])[0])
                 state = m.state(since)
                 # Separate cursor: the two logs number their entries independently.
-                state["daq"] = lk.state(int(q.get("dsince", [0])[0]))
+                state["daq"] = lk.state(int(q.get("dsince", [0])[0]), int(q.get("ssince", [0])[0]))
                 state["scan"] = dict(sc.state)
                 self._json(state)
             elif path.path == "/api/ports":
                 self._json({"ports": list_ports()})
+            elif path.path == "/api/daq/controls":
+                self._json({"controls": daq.CONTROLS, "actions": {k: v["label"] for k, v in daq.ACTIONS.items()}})
+            elif path.path == "/api/daq/settings":
+                self._json(lk.settings())
             elif path.path == "/api/daq/resources":
                 self._json({"resources": daq.Lockin.list_resources()})
             elif path.path == "/api/daq/history":
@@ -750,6 +754,13 @@ def make_handler(m: Machine, lk: daq.Lockin, sc: scan.Scanner):
                     r = lk.abort_run()
                 elif route == "daq/ping":
                     r = lk.ping()
+                elif route == "daq/set":
+                    r = lk.set_control(data.get("name"), data.get("value"))
+                elif route == "daq/action":
+                    r = lk.action(data.get("name"))
+                elif route == "daq/monitor":
+                    r = lk.set_monitor(bool(data.get("on")))
+                    save_config(m.cfg)
                 elif route == "daq/config":
                     for k, v in data.items():
                         if k in daq.DEFAULT_DAQ_CONFIG:  # known keys only; config.json is shared with the gantry

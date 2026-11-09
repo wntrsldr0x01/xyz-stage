@@ -25,9 +25,12 @@ DEFAULT_DAQ_CONFIG = {
     "check_overload": True,  # one extra CUROVLDSTAT? query per sample
     "scan_z_planes": "",     # remembered scan form values (scan.py)
     "scan_duration_s": 5.0,
+    "monitor": True,         # live view (no recording) while connected and not recording
+    "monitor_rate_hz": 5.0,
 }
 
-RECENT_MAXLEN = 2000  # live-plot ring buffer: enough for a 10 Hz run's last ~3 minutes
+STREAM_MAXLEN = 6000      # live-plot buffer: 10 min at 10 Hz
+STREAM_MAX_PER_POLL = 3000
 # Measured on the bench (SR860 FW V1.51, USB-TMC, pyvisa-py, macOS): SNAP? 0,1 ~11 ms mean,
 # 20 ms max; +CUROVLDSTAT? ~20 ms mean, 40 ms max. 20 Hz is about the ceiling.
 MAX_RATE_HZ = 20.0
@@ -65,14 +68,26 @@ class Lockin:
         self.inst = None
         self.identity = None  # {"model", "serial", "firmware", "resource"}
         self.latency_ms = None  # last measured query round trip (ping or sample)
-        self.lock = threading.Lock()  # guards log and _recent (read by HTTP threads, written by the run)
+        self.lock = threading.Lock()  # guards log and the sample stream (HTTP threads read, workers write)
         self.log = []
         self.seq = 0
         self.run = _idle_run()
         self._run_stop = threading.Event()
         self._run_abort = threading.Event()
         self._run_thread = None
-        self._recent = deque(maxlen=RECENT_MAXLEN)  # for the live plot, cleared each run
+        # Live-plot stream: samples from the current run or live monitor. "i" counts across
+        # streams so a client can ask for only what it hasn't seen; stream_id changes when a
+        # new run/monitor session starts so the client knows to reset its plot.
+        self._stream = deque(maxlen=STREAM_MAXLEN)
+        self._stream_i = 0
+        self._stream_id = 0
+        self._stream_kind = None   # "run" | "monitor"
+        self._stream_t0 = time.monotonic()
+        # Live monitor (no recording). Paused by instrument changes (_ctl_lock) so a slow
+        # auto-range can't make a monitor query time out and drop the link.
+        self._mon_thread = None
+        self._mon_stop = threading.Event()
+        self._ctl_lock = threading.Lock()
 
     def position_fn(self):
         # Always a copy: server.Machine.jog() mutates its pos dict in place, so keeping
@@ -115,7 +130,73 @@ class Lockin:
         self.cfg["resource"] = resource
         self._log("sys", f"connected {model} SN{serial} FW{firmware} @ {resource}")
         self.ping()
+        if self.cfg.get("monitor", True):
+            self.start_monitor()
         return True
+
+    # ---------- live monitor + sample stream ----------
+    def _new_stream(self, kind):
+        with self.lock:
+            self._stream_id += 1
+            self._stream_kind = kind
+            self._stream.clear()
+            self._stream_t0 = time.monotonic()
+
+    def _push(self, sample):
+        with self.lock:
+            self._stream_i += 1
+            sample["i"] = self._stream_i
+            self._stream.append(sample)
+
+    @property
+    def monitoring(self):
+        return self._mon_thread is not None and self._mon_thread.is_alive()
+
+    def start_monitor(self):
+        """Poll X/Y for the live view without writing anything to disk."""
+        if not self.connected or self.run["state"] == "running" or self.monitoring:
+            return {"ok": True}
+        self._mon_stop.clear()
+        self._new_stream("monitor")
+        self._mon_thread = threading.Thread(target=self._monitor_worker, daemon=True)
+        self._mon_thread.start()
+        return {"ok": True}
+
+    def stop_monitor(self):
+        self._mon_stop.set()
+        t = self._mon_thread
+        if t is not None and t.is_alive() and t is not threading.current_thread():
+            t.join(timeout=5.0)
+        return {"ok": True}
+
+    def set_monitor(self, on):
+        """The Live toggle: remembered in cfg so a run ending (or the next connect)
+        resumes the live view only if the operator wants it."""
+        self.cfg["monitor"] = bool(on)
+        return self.start_monitor() if on else self.stop_monitor()
+
+    def _monitor_worker(self):
+        interval = 1.0 / max(0.5, min(float(self.cfg.get("monitor_rate_hz", 5.0)), MAX_RATE_HZ))
+        check_ovld = bool(self.cfg.get("check_overload", True))
+        t0 = time.monotonic()
+        while not self._mon_stop.is_set():
+            with self._ctl_lock:  # an instrument change in progress owns the session
+                if self._mon_stop.is_set() or self.inst is None:
+                    break
+                try:
+                    x, y, r, theta, latency_ms = self.snap_xyrt()
+                    status = "ok"
+                    if check_ovld:
+                        ovld = self.read_overload()
+                        if ovld:
+                            status = "overload:" + "+".join(ovld)
+                except Exception as e:
+                    self._drop_link(f"live view: {type(e).__name__}: {e}")
+                    break
+            self.latency_ms = latency_ms
+            self._push({"elapsed_s": time.monotonic() - t0, "x": x, "y": y, "r": r, "theta": theta,
+                        "status": status})
+            self._mon_stop.wait(interval)
 
     def ping(self):
         """One *IDN? round trip: confirms the link and measures query latency (spec sec. 7
@@ -125,15 +206,18 @@ class Lockin:
             return {"ok": False, "error": "not connected"}
         if self.run["state"] in ("running", "settling"):
             return {"ok": False, "error": "a run is in progress (its sample latency is shown instead)"}
-        t0 = time.monotonic()
-        try:
-            model, _, _ = self.inst.check_id()
-            if model is None:
-                raise LinkError("malformed *IDN? reply")
-        except Exception as e:
-            self._drop_link(f"ping: {type(e).__name__}: {e}")
-            return {"ok": False, "error": f"no answer from the SR860 ({e}); press Connect to recover"}
-        self.latency_ms = (time.monotonic() - t0) * 1000.0
+        with self._ctl_lock:
+            if self.inst is None:
+                return {"ok": False, "error": "not connected"}
+            t0 = time.monotonic()
+            try:
+                model, _, _ = self.inst.check_id()
+                if model is None:
+                    raise LinkError("malformed *IDN? reply")
+            except Exception as e:
+                self._drop_link(f"ping: {type(e).__name__}: {e}")
+                return {"ok": False, "error": f"no answer from the SR860 ({e}); press Connect to recover"}
+            self.latency_ms = (time.monotonic() - t0) * 1000.0
         return {"ok": True, "latency_ms": round(self.latency_ms, 2)}
 
     def disconnect(self):
@@ -143,6 +227,7 @@ class Lockin:
         self.stop_run()
         if self._run_thread is not None and self._run_thread.is_alive():
             self._run_thread.join(timeout=5.0)
+        self.stop_monitor()
         if self.inst is not None:
             try:
                 self.inst.disconnect()
@@ -290,6 +375,7 @@ class Lockin:
         if settle_s < 0:
             return {"ok": False, "error": "settle time can't be negative"}
 
+        self.stop_monitor()  # the run owns the session from here
         try:
             meta = self.read_metadata()
         except Exception as e:
@@ -316,8 +402,6 @@ class Lockin:
 
         self._run_stop.clear()
         self._run_abort.clear()
-        with self.lock:
-            self._recent.clear()
         self.run = {**_idle_run(), "state": "settling" if settle_s > 0 else "running",
                     "started": time.time(), "settle_s": settle_s, "duration_s": duration_s,
                     "rate_hz": rate_hz, "run_id": run_id, "path": str(csv_path)}
@@ -326,6 +410,8 @@ class Lockin:
             args=(duration_s, rate_hz, csv_path, json_path, meta, pos, condition, notes, settle_s),
             daemon=True)
         self._run_thread.start()
+        if settle_s > 0 and self.cfg.get("monitor", True):
+            self.start_monitor()  # watch the signal settle; the run stops it when recording begins
         self._log("sys", f"run started: {csv_path.name} ({rate_hz:g} Hz, "
                          f"{'until stopped' if duration_s is None else f'{duration_s:g} s'})")
         return {"ok": True, "path": str(csv_path)}
@@ -340,7 +426,12 @@ class Lockin:
                 self.run["msg"] = "ended during settling, nothing recorded"
                 return
             time.sleep(min(0.1, max(0.0, settle_deadline - time.monotonic())))
+        self.stop_monitor()
+        if self.inst is None:  # the live view lost the link while settling
+            self.run["state"], self.run["msg"] = "error", "SR860 link lost while settling, nothing recorded"
+            return
         self.run["state"] = "running"
+        self._new_stream("run")
 
         check_ovld = bool(self.cfg.get("check_overload", True))
         interval = 1.0 / rate_hz
@@ -386,9 +477,8 @@ class Lockin:
                             ok_values.append((x, y, r))
                         else:
                             n_ovld += 1
-                        with self.lock:
-                            self._recent.append({"elapsed_s": elapsed, "x": x, "y": y, "r": r,
-                                                 "theta": theta, "status": status})
+                        self._push({"elapsed_s": elapsed, "x": x, "y": y, "r": r, "theta": theta,
+                                    "status": status})
                     writer.writerow([
                         datetime.now(timezone.utc).isoformat(), f"{elapsed:.4f}",
                         _csv_num(pos.get("X")), _csv_num(pos.get("Y")), _csv_num(pos.get("Z")),
@@ -491,6 +581,8 @@ class Lockin:
                                + (" · SETTINGS CHANGED" if settings_changed else "")
                                + (" · INCOMPLETE" if incomplete else ""))
             self._log("sys", f"run {state}: {self.run['msg']} -> {csv_path.name}")
+            if self.connected and self.cfg.get("monitor", True):
+                self.start_monitor()
         except Exception as e:
             self.run["state"] = "error"
             self.run["msg"] = str(e)
@@ -510,15 +602,91 @@ class Lockin:
         return {"ok": True}
 
     # ---------- state ----------
-    def state(self, since=0, n_samples=300):
+    def state(self, since=0, sample_since=0):
         with self.lock:
             log = [entry for entry in self.log if entry[0] > since][-400:]
-            # Tail only: the live plot wants recent history, not the whole run --
-            # this keeps the /api/state payload bounded even on a long run.
-            samples = list(self._recent)[-n_samples:]
+            # Only samples the client hasn't seen ("i" > sample_since): keeps each poll small
+            # even with a 10-minute plot window.
+            samples = [s for s in self._stream if s["i"] > sample_since][-STREAM_MAX_PER_POLL:]
+            stream = {"id": self._stream_id, "kind": self._stream_kind}
         return {"connected": self.connected, "mock": self.mock, "identity": self.identity,
                 "latency_ms": None if self.latency_ms is None else round(self.latency_ms, 2),
+                "monitoring": self.monitoring, "stream": stream,
                 "run": dict(self.run), "samples": samples, "log": log, "cfg": self.cfg}
+
+    # ---------- instrument controls ----------
+    def settings(self):
+        """Current values of every control (CONTROLS), read from the instrument."""
+        if not self.connected:
+            return {"ok": False, "error": "not connected"}
+        if self.run["state"] in ("running", "settling"):
+            return {"ok": False, "error": "a run is in progress"}
+        with self._ctl_lock:
+            try:
+                values = {c["name"]: _ctl_get(self.inst, c) for c in CONTROLS}
+            except Exception as e:
+                self._drop_link(f"reading settings: {type(e).__name__}: {e}")
+                return {"ok": False, "error": f"couldn't read settings ({e}); press Connect to recover"}
+        return {"ok": True, "values": values}
+
+    def set_control(self, name, value):
+        """Change one SR860 setting, then read it back to confirm it took. Refused while
+        recording: the run's settings snapshot (and the settings-changed check) would
+        otherwise no longer describe the data."""
+        if not self.connected:
+            return {"ok": False, "error": "not connected"}
+        if self.run["state"] in ("running", "settling"):
+            return {"ok": False, "error": "can't change SR860 settings while recording"}
+        c = CONTROLS_BY_NAME.get(name)
+        if c is None:
+            return {"ok": False, "error": f"unknown setting {name!r}"}
+        try:
+            value = _ctl_validate(c, value)
+        except ValueError as e:
+            return {"ok": False, "error": str(e)}
+        with self._ctl_lock:
+            try:
+                before = _ctl_get(self.inst, c)
+                _ctl_set(self.inst, c, value)
+                after = _ctl_get(self.inst, c)
+            except Exception as e:
+                self._drop_link(f"setting {name}: {type(e).__name__}: {e}")
+                return {"ok": False, "error": f"SR860 didn't answer ({e}); press Connect to recover"}
+        self._log("sys", f"{c['label']}: {_fmt_ctl(before)} -> {_fmt_ctl(after)}")
+        if not _ctl_equal(c, after, value):
+            return {"ok": False, "value": after,
+                    "error": f"SR860 kept {c['label']} at {_fmt_ctl(after)} (asked for {_fmt_ctl(value)})"}
+        return {"ok": True, "value": after}
+
+    def action(self, name):
+        """Auto phase / auto range / auto scale. These change settings, so like set_control
+        they're refused while recording; the new values are read back and logged."""
+        if not self.connected:
+            return {"ok": False, "error": "not connected"}
+        if self.run["state"] in ("running", "settling"):
+            return {"ok": False, "error": "can't run auto functions while recording"}
+        a = ACTIONS.get(name)
+        if a is None:
+            return {"ok": False, "error": f"unknown action {name!r}"}
+        with self._ctl_lock:
+            try:
+                before = {n: _ctl_get(self.inst, CONTROLS_BY_NAME[n]) for n in a["affects"]}
+                getattr(self.inst.auto, a["method"])()
+                # Auto range/scale can take a while: wait for the readback with a long timeout
+                # instead of letting a 2 s timeout break the link.
+                self.inst.comm.set_timeout(20.0)
+                try:
+                    time.sleep(a["settle_s"])
+                    after = {n: _ctl_get(self.inst, CONTROLS_BY_NAME[n]) for n in a["affects"]}
+                finally:
+                    self.inst.comm.set_timeout(VISA_TIMEOUT_S)
+            except Exception as e:
+                self._drop_link(f"{a['label']}: {type(e).__name__}: {e}")
+                return {"ok": False, "error": f"SR860 didn't answer ({e}); press Connect to recover"}
+        changes = ", ".join(f"{CONTROLS_BY_NAME[n]['label']} {_fmt_ctl(before[n])} -> {_fmt_ctl(after[n])}"
+                            for n in a["affects"] if before[n] != after[n]) or "no change"
+        self._log("sys", f"{a['label']}: {changes}")
+        return {"ok": True, "values": after}
 
 
 def _idle_run():
@@ -549,6 +717,105 @@ def _xy_modifiers(meta):
         if o.get("ratio"):
             mods.append(f"{k} ratio mode")
     return mods
+
+
+# ---------- instrument controls ----------
+# Option values mirror srsinst.sr860 Signal/Reference dicts, generated the same way the driver
+# builds them so floats compare equal to its keys (duplicated here so --mock needs no driver).
+_V_SENS = [1.0] + [float(f"{j * 10 ** -(i + 1):.1e}") for i in range(9) for j in (5.0, 2.0, 1.0)]
+_A_SENS = [1e-6] + [float(f"{j * 10 ** -(i + 7):.1e}") for i in range(9) for j in (5.0, 2.0, 1.0)]
+_TCS = [float(f"{j * 10 ** (i - 6):.1e}") for i in range(11) for j in (1.0, 3.0)]
+
+
+def _ctl(name, label, path, kind, group, options=None, lo=None, hi=None, unit="", rtol=0.0, atol=0.0, mode=None):
+    return {"name": name, "label": label, "path": path, "kind": kind, "group": group, "options": options,
+            "min": lo, "max": hi, "unit": unit, "rtol": rtol, "atol": atol, "mode": mode}
+
+
+CONTROLS = [
+    _ctl("sensitivity_v", "Sensitivity", ("signal", "voltage_sensitivity"), "choice", "Gain & filter", _V_SENS, unit="V", mode="voltage"),
+    _ctl("sensitivity_a", "Sensitivity", ("signal", "current_sensitivity"), "choice", "Gain & filter", _A_SENS, unit="A", mode="current"),
+    _ctl("time_constant", "Time constant", ("signal", "time_constant"), "choice", "Gain & filter", _TCS, unit="s"),
+    _ctl("filter_slope", "Filter slope", ("signal", "filter_slope"), "choice", "Gain & filter", [6, 12, 18, 24], unit="dB/oct"),
+    _ctl("sync_filter", "Sync filter", ("signal", "sync_filter"), "choice", "Gain & filter", ["off", "on"]),
+    _ctl("input_mode", "Input", ("signal", "input_mode"), "choice", "Input", ["voltage", "current"]),
+    _ctl("voltage_input_mode", "Config", ("signal", "voltage_input_mode"), "choice", "Input", ["A", "A-B"], mode="voltage"),
+    _ctl("voltage_input_coupling", "Coupling", ("signal", "voltage_input_coupling"), "choice", "Input", ["AC", "DC"], mode="voltage"),
+    _ctl("voltage_input_shield", "Shield", ("signal", "voltage_input_shield"), "choice", "Input", ["float", "ground"], mode="voltage"),
+    _ctl("voltage_input_range", "Range", ("signal", "voltage_input_range"), "choice", "Input", [1.0, 0.3, 0.1, 0.03, 0.01], unit="V", mode="voltage"),
+    _ctl("current_input_gain", "Current gain", ("signal", "current_input_gain"), "choice", "Input", [1e6, 1e8], unit="V/A", mode="current"),
+    _ctl("reference_source", "Source", ("ref", "reference_source"), "choice", "Reference", ["internal", "external", "dual", "chop"]),
+    # SR860 limits from the driver's FloatCommand declarations (FREQ 0.001 Hz-500 kHz, SLVL 0-2 V);
+    # readback tolerances from their significant figures (FREQ 6, SLVL 3, PHAS 7).
+    _ctl("frequency", "Frequency", ("ref", "frequency"), "float", "Reference", lo=0.001, hi=500000.0, unit="Hz", rtol=1e-5, atol=1e-3),
+    _ctl("phase", "Phase", ("ref", "phase"), "float", "Reference", lo=-360000.0, hi=360000.0, unit="°", atol=1e-3),
+    _ctl("harmonic", "Harmonic", ("ref", "harmonic"), "int", "Reference", lo=1, hi=99),
+    _ctl("sine_out_amplitude", "Sine out", ("ref", "sine_out_amplitude"), "float", "Reference", lo=0.0, hi=2.0, unit="V", rtol=1e-3, atol=1e-9),
+    _ctl("offset_X", "X offset on", ("output", "offset", "X"), "bool", "Output offsets"),
+    _ctl("offset_Y", "Y offset on", ("output", "offset", "Y"), "bool", "Output offsets"),
+    _ctl("offset_R", "R offset on", ("output", "offset", "R"), "bool", "Output offsets"),
+]
+CONTROLS_BY_NAME = {c["name"]: c for c in CONTROLS}
+
+ACTIONS = {
+    "auto_phase": {"label": "Auto phase", "method": "set_phase", "affects": ["phase"], "settle_s": 0.5},
+    "auto_range": {"label": "Auto range", "method": "set_range", "affects": ["voltage_input_range"], "settle_s": 1.0},
+    "auto_scale": {"label": "Auto scale", "method": "set_scale", "affects": ["sensitivity_v"], "settle_s": 1.0},
+}
+
+
+def _ctl_get(inst, c):
+    obj = getattr(inst, c["path"][0])
+    if len(c["path"]) == 3:
+        return getattr(obj, c["path"][1])[c["path"][2]]
+    return getattr(obj, c["path"][1])
+
+
+def _ctl_set(inst, c, value):
+    obj = getattr(inst, c["path"][0])
+    if len(c["path"]) == 3:
+        getattr(obj, c["path"][1])[c["path"][2]] = value
+    else:
+        setattr(obj, c["path"][1], value)
+
+
+def _ctl_validate(c, value):
+    """Return the exact value to send (the driver's own key for choices), or raise ValueError.
+    Nothing outside the instrument's documented set/range is ever sent."""
+    if c["kind"] == "choice":
+        for o in c["options"]:
+            if o == value:
+                return o
+            if isinstance(o, float) and isinstance(value, (int, float)) and abs(o - value) <= 1e-9 * abs(o):
+                return o
+        raise ValueError(f"{c['label']}: {value!r} isn't one of the SR860's values")
+    if c["kind"] == "bool":
+        if isinstance(value, bool):
+            return value
+        raise ValueError(f"{c['label']}: expected true/false")
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{c['label']}: {value!r} isn't a number")
+    if not math.isfinite(v) or not c["min"] <= v <= c["max"]:
+        raise ValueError(f"{c['label']} must be between {c['min']:g} and {c['max']:g} {c['unit']}".strip())
+    if c["kind"] == "int":
+        if v != int(v):
+            raise ValueError(f"{c['label']} must be a whole number")
+        return int(v)
+    return v
+
+
+def _ctl_equal(c, actual, wanted):
+    if c["kind"] == "float":
+        return actual is not None and abs(float(actual) - wanted) <= max(c["atol"], c["rtol"] * abs(wanted))
+    if c["kind"] == "bool":
+        return bool(actual) == bool(wanted)
+    return actual == wanted
+
+
+def _fmt_ctl(v):
+    return f"{v:g}" if isinstance(v, float) else str(v)
 
 
 def usbtmc_clear(resource):
@@ -739,6 +1006,7 @@ class MockSR860:
         self.signal = _MockSignal()
         self.status = _MockStatus()
         self.output = _MockOutput()
+        self.auto = _MockAuto(self)
         self.comm = self  # query_text lives here so snap_xyrt()'s inst.comm.query_text(...) works unchanged
 
     def check_id(self):
@@ -789,6 +1057,20 @@ class _MockSignal:
 
 class _MockStatus:
     overload = 0
+
+
+class _MockAuto:
+    def __init__(self, inst):
+        self._inst = inst
+
+    def set_phase(self):
+        self._inst.ref.phase = 37.5
+
+    def set_range(self):
+        self._inst.signal.voltage_input_range = 0.1
+
+    def set_scale(self):
+        self._inst.signal.voltage_sensitivity = 2e-06
 
 
 class _MockOutput:
