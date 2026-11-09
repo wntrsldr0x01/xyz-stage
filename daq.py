@@ -10,6 +10,7 @@ connect, fail and are driven independently.
 import csv
 import json
 import math
+import re
 import threading
 import time
 from collections import deque
@@ -27,11 +28,19 @@ DEFAULT_DAQ_CONFIG = {
 }
 
 RECENT_MAXLEN = 2000  # live-plot ring buffer: enough for a 10 Hz run's last ~3 minutes
-MAX_RATE_HZ = 50.0    # USB polling ceiling we'll accept; the real limit is measured per run
-# A dropped USB link shows up as a string of failed queries. Past this many in a row the
-# run ends as incomplete instead of logging error rows forever (spec sec. 11: never
-# silently resume).
-MAX_CONSECUTIVE_ERRORS = 5
+# Measured on the bench (SR860 FW V1.51, USB-TMC, pyvisa-py, macOS): SNAP? 0,1 ~11 ms mean,
+# 20 ms max; +CUROVLDSTAT? ~20 ms mean, 40 ms max. 20 Hz is about the ceiling.
+MAX_RATE_HZ = 20.0
+# pyvisa's default timeout is infinite and the SRS driver never sets one, so a lost
+# reply would hang the run forever. Every query on the bench took < 50 ms.
+VISA_TIMEOUT_S = 2.0
+
+
+class LinkError(RuntimeError):
+    """The USB-TMC exchange with the instrument failed. On the bench a single failed
+    transfer left the SR860's endpoint stalled, and a late reply could be read as the
+    answer to the next query, so the session can't be trusted afterwards: the run ends
+    (incomplete) and Connect has to be pressed again (see Lockin._open_and_identify)."""
 
 # CUROVLDSTAT? bits, from srsinst.sr860 Status.OverloadStatusBitDict.
 OVERLOAD_BITS = {0: "ch1_scale", 1: "ch2_scale", 3: "ref_unlocked", 4: "input_range",
@@ -97,22 +106,10 @@ class Lockin:
             raise RuntimeError("no VISA resource selected")
         if self.mock:
             self.inst = MockSR860()
-        else:
-            # Imported lazily -- srsinst.sr860/pyvisa are optional, same pattern
-            # server.Machine uses for pyserial so --mock works without them installed.
-            from srsinst.sr860 import SR860
-            self.inst = SR860("visa", resource)
-        try:
+            self.inst.comm.set_timeout(VISA_TIMEOUT_S)
             model, serial, firmware = self.inst.check_id()
-        except Exception:
-            # Wrong instrument on this resource (check_id's regex rejects a non-SR860
-            # *IDN? reply) or a query error: close the VISA session properly rather
-            # than leaving a half-open handle behind.
-            self.disconnect()
-            raise
-        if model is None:
-            self.disconnect()
-            raise RuntimeError(f"no response to *IDN? from {resource}")
+        else:
+            model, serial, firmware = self._open_and_identify(resource)
         self.identity = {"model": model, "serial": serial, "firmware": firmware, "resource": resource}
         self.cfg["resource"] = resource
         self._log("sys", f"connected {model} SN{serial} FW{firmware} @ {resource}")
@@ -138,18 +135,69 @@ class Lockin:
     def connected(self):
         return self.inst is not None
 
+    def _open_and_identify(self, resource, attempts=3):
+        """Open the VISA session and confirm an SR860 answers *IDN?. If it doesn't (a
+        previous session left the USB endpoint stalled, or a stale reply comes back),
+        close, USB-TMC-clear and try again. Learned on the bench (SR860 FW V1.51):
+          - it holds ONE pending reply; a new query discards an unread one (IEEE 488.2
+            query-interrupted), so a fresh *IDN? after a clear resynchronizes by itself;
+          - reading with no reply pending stalls the bulk-IN endpoint (pipe error), and the
+            stall survives closing/reopening the session -- only a USB-TMC clear fixes it.
+        So: strictly one query -> one read, and clear only when the plain query fails."""
+        from srsinst.sr860 import SR860  # lazy: optional dependency (see Machine/pyserial)
+        last = None
+        for attempt in range(attempts):
+            try:
+                self.inst = SR860("visa", resource)
+                self.inst.comm.set_timeout(VISA_TIMEOUT_S)
+                model, serial, firmware = self.inst.check_id()  # raises on a non-SR860 reply
+                if model is not None:
+                    if attempt:
+                        self._log("sys", f"SR860 answering after USB-TMC clear (attempt {attempt + 1})")
+                    self.inst.comm.send("*CLS")  # clear error bits a broken earlier session left
+                    return model, serial, firmware
+                last = "malformed *IDN? reply"
+            except Exception as e:
+                last = f"{type(e).__name__}: {e}"
+            try:
+                if self.inst is not None:
+                    self.inst.disconnect()
+            except Exception:
+                pass
+            self.inst = None
+            if attempt < attempts - 1:
+                status = usbtmc_clear(resource)
+                self._log("sys", f"SR860 not answering ({last}); USB-TMC clear: {status or 'not applicable'}")
+                time.sleep(0.2)
+        raise LinkError(f"SR860 not answering on {resource} after {attempts} attempts ({last}). "
+                        f"Check the rear-panel USB cable and that the instrument is on; "
+                        f"if it persists, unplug/replug the USB cable.")
+
+    def _drop_link(self, reason):
+        """Close a session that can no longer be trusted (see LinkError). Called from the
+        run worker, so it doesn't join the run thread the way disconnect() does."""
+        inst, self.inst, self.identity = self.inst, None, None
+        if inst is not None:
+            try:
+                inst.disconnect()
+            except Exception:
+                pass
+        self._log("sys", f"SR860 link closed after a communication error ({reason}). "
+                         f"Press Connect to recover: it re-checks the link and USB-TMC-clears it if needed.")
+
     # ---------- instrument reads ----------
     def snap_xyrt(self):
-        """One SNAP? query for X, Y, R, theta together (FR-04): one USB round trip,
-        and R/theta come from the instrument's own computation, not local trig --
-        so the run JSON can honestly say r_theta_source: "instrument".
-        SNAP? parameter codes are the driver's Display/DataTransfer.ParameterDict
-        (X=0, Y=1, R=2, Theta=3)."""
+        """X and Y from one SNAP? 0,1 (FR-04: synchronous X/Y); R and theta derived.
+        The SR860's SNAP? takes 2 or 3 parameters (not 4+ like the SR830) -- an invalid
+        query stalls its USB endpoint. Deriving R = hypot(X, Y), theta = atan2(Y, X) also
+        keeps them true values: the instrument's own R output has its display offset
+        applied when one is enabled (on the bench R read -3.1e-8 V with a 2.21% offset on,
+        true |X+iY| = 7.9e-8 V). theta matched the instrument's to 0.001 deg."""
         t0 = time.monotonic()
-        reply = self.inst.comm.query_text("SNAP? 0,1,2,3")
+        reply = self.inst.comm.query_text("SNAP? 0,1")
         latency_ms = (time.monotonic() - t0) * 1000.0
-        x, y, r, theta = (float(v.strip()) for v in reply.strip().split(","))
-        return x, y, r, theta, latency_ms
+        x, y = (float(v.strip()) for v in reply.strip().split(","))
+        return x, y, math.hypot(x, y), math.degrees(math.atan2(y, x)), latency_ms
 
     def read_overload(self):
         """Current (not latched) overload bits, as names. Empty list = no overload."""
@@ -160,15 +208,15 @@ class Lockin:
         """Settings snapshot for the run's JSON sidecar (FR-06). Read once at run
         start and again at run end (to catch unlogged changes, sec. 11), not per
         sample -- re-querying a dozen settings every tick would wreck the poll rate.
-        Each field is read on its own so one unsupported query doesn't block a run."""
+        Stops at the first failed read (LinkError): after a failure the reply queue is
+        out of step, so later "values" could belong to different settings."""
         inst = self.inst
 
         def get(name, fn):
             try:
                 return fn()
             except Exception as e:
-                self._log("sys", f"could not read {name}: {e}")
-                return None
+                raise LinkError(f"reading {name}: {type(e).__name__}: {e}") from e
 
         mode = get("input_mode", lambda: inst.signal.input_mode)
         meta = {
@@ -191,6 +239,15 @@ class Lockin:
             meta["voltage_input_coupling"] = get("voltage_input_coupling", lambda: inst.signal.voltage_input_coupling)
             meta["voltage_input_shield"] = get("voltage_input_shield", lambda: inst.signal.voltage_input_shield)
             meta["voltage_input_range_v"] = get("voltage_input_range", lambda: inst.signal.voltage_input_range)
+        # Output offset/expand/ratio change the X/Y values the instrument reports (spec
+        # sec. 12 H: recorded units and signs must match the front panel).
+        out = {}
+        for k in ("X", "Y", "R"):
+            out[k] = {"offset_on": get(f"{k} offset", lambda k=k: inst.output.offset[k]),
+                      "offset_pct": get(f"{k} offset %", lambda k=k: inst.output.offset_percent[k]),
+                      "expand": get(f"{k} expand", lambda k=k: inst.output.expand[k]),
+                      "ratio": get(f"{k} ratio", lambda k=k: inst.output.ratio_mode[k])}
+        meta["output_processing"] = out
         return meta
 
     # ---------- timed run ----------
@@ -212,7 +269,14 @@ class Lockin:
         if settle_s < 0:
             return {"ok": False, "error": "settle time can't be negative"}
 
-        meta = self.read_metadata()
+        try:
+            meta = self.read_metadata()
+        except Exception as e:
+            self._drop_link(str(e))
+            return {"ok": False, "error": f"couldn't read SR860 settings ({e}); press Connect to recover the link"}
+        xy_mods = _xy_modifiers(meta)
+        if xy_mods:
+            self._log("sys", f"WARNING: SR860 output settings modify the recorded X/Y: {', '.join(xy_mods)}")
         pos = self.position_fn()
         run_id = run_id or time.strftime("Run%H%M%S")
         out_dir = Path(data_dir)
@@ -259,12 +323,11 @@ class Lockin:
         interval = 1.0 / rate_hz
         t_start = time.monotonic()
         start_utc = datetime.now(timezone.utc)
-        n_ok = n_err = n_ovld = consecutive_err = 0
+        n_ok = n_err = n_ovld = 0
         ok_values = []    # (x, y, r) of status == "ok" samples, for the summary stats
         tick_times = []   # elapsed time of every attempted sample, for achieved rate + jitter
         latencies = []
-        comm_lost = False
-        ovld_unreadable_logged = False
+        comm_error = None  # set on the first failed query; the run ends there (see LinkError)
         try:
             with open(csv_path, "w", newline="") as f:
                 writer = csv.writer(f)
@@ -279,32 +342,27 @@ class Lockin:
                     pos = self.position_fn()
                     try:
                         x, y, r, theta, latency_ms = self.snap_xyrt()
+                        status = "ok"
+                        if check_ovld:
+                            ovld = self.read_overload()
+                            if ovld:
+                                status = "overload:" + "+".join(ovld)
                     except Exception as e:
-                        # Never fill a failed read with a fabricated zero (FR-08):
-                        # leave the value columns blank and flag the row instead.
+                        # Never fill a failed read with a fabricated zero (FR-08): leave the
+                        # value columns blank and flag the row. Also never carry on after it:
+                        # the next reply could be this query's late answer (stale X/Y).
                         x = y = r = theta = latency_ms = ""
                         status = "error"
                         n_err += 1
-                        consecutive_err += 1
-                        self._log("sys", f"sample failed: {e}")
+                        comm_error = f"{type(e).__name__}: {e}"
+                        self._log("sys", f"sample failed: {comm_error}")
                     else:
-                        consecutive_err = 0
                         n_ok += 1
                         latencies.append(latency_ms)
-                        status = "ok"
-                        if check_ovld:
-                            try:
-                                ovld = self.read_overload()
-                                if ovld:
-                                    status = "overload:" + "+".join(ovld)
-                                    n_ovld += 1
-                            except Exception as e:
-                                status = "ok_ovld_unread"
-                                if not ovld_unreadable_logged:
-                                    self._log("sys", f"overload status unreadable: {e}")
-                                    ovld_unreadable_logged = True
                         if status == "ok":
                             ok_values.append((x, y, r))
+                        else:
+                            n_ovld += 1
                         with self.lock:
                             self._recent.append({"elapsed_s": elapsed, "x": x, "y": y, "r": r,
                                                  "theta": theta, "status": status})
@@ -319,10 +377,7 @@ class Lockin:
                     self.run["index"] = n_ok + n_err
                     self.run["n_errors"] = n_err
                     self.run["n_overload"] = n_ovld
-                    if consecutive_err >= MAX_CONSECUTIVE_ERRORS:
-                        comm_lost = True
-                        self._log("sys", f"{consecutive_err} consecutive failed reads: "
-                                         f"communication lost, run ended as incomplete")
+                    if comm_error:
                         break
                     next_tick += interval
                     sleep_for = next_tick - time.monotonic()
@@ -338,16 +393,21 @@ class Lockin:
             if not stationary:
                 self._log("sys", f"WARNING: stage moved during run (start {start_pos} -> end {end_pos})")
             # Re-read settings to catch knob changes made mid-run (spec sec. 11). Skipped
-            # when the link is gone -- every query would just time out.
+            # when the link is broken -- it can't be trusted for anything until reconnected.
             settings_changed = None
-            if not comm_lost:
-                end_meta = self.read_metadata()
-                settings_changed = [k for k, v in meta.items()
-                                    if v is not None and end_meta.get(k) is not None and end_meta[k] != v]
-                if settings_changed:
-                    self._log("sys", f"WARNING: instrument settings changed during run: {', '.join(settings_changed)}")
+            if not comm_error:
+                try:
+                    end_meta = self.read_metadata()
+                except Exception as e:
+                    comm_error = f"re-reading settings at run end: {e}"
+                else:
+                    settings_changed = [k for k, v in meta.items() if end_meta.get(k) != v]
+                    if settings_changed:
+                        self._log("sys", f"WARNING: instrument settings changed during run: {', '.join(settings_changed)}")
+            if comm_error:
+                self._drop_link(comm_error)
 
-            if comm_lost:
+            if comm_error:
                 state = "error"
             elif self._run_abort.is_set():
                 state = "aborted"
@@ -361,7 +421,7 @@ class Lockin:
             summary = {
                 "file": str(csv_path),
                 "end_state": state,
-                "end_reason": "communication lost" if comm_lost else state,
+                "end_reason": f"communication error: {comm_error}" if comm_error else state,
                 "incomplete": incomplete,
                 "n_samples": n_ok,
                 "n_errors": n_err,
@@ -371,6 +431,7 @@ class Lockin:
                 **_timing_stats(tick_times, latencies),
                 "stationary": stationary,
                 "settings_changed": settings_changed,
+                "xy_output_processing": _xy_modifiers(meta),
                 "stats": _value_stats(ok_values),
             }
             doc = {
@@ -387,7 +448,9 @@ class Lockin:
                 "notes": notes,
                 "start_utc": start_utc.isoformat(),
                 "end_utc": end_utc.isoformat(),
-                "r_theta_source": "instrument",  # from SNAP? 0,1,2,3, not locally derived
+                "xy_source": "SNAP? 0,1 (X and Y from the same instant)",
+                "r_theta_source": "derived: R = hypot(X, Y), theta = atan2(Y, X) in degrees "
+                                  "(not the instrument's R output, which includes its R offset when enabled)",
                 "stats_over": "status == ok samples only (overload and error rows excluded)",
                 **summary,
             }
@@ -395,6 +458,7 @@ class Lockin:
             self.run["state"] = state
             self.run["summary"] = summary
             self.run["msg"] = (f"{n_ok} samples, {n_err} errors, {n_ovld} overloaded"
+                               + (" · COMMUNICATION ERROR: reconnect" if comm_error else "")
                                + (" · STAGE MOVED" if not stationary else "")
                                + (" · SETTINGS CHANGED" if settings_changed else "")
                                + (" · INCOMPLETE" if incomplete else ""))
@@ -439,6 +503,73 @@ def _fmt_coord(v):
 
 def _csv_num(v):
     return "" if v is None else v
+
+
+def _xy_modifiers(meta):
+    """SR860 output settings that change what X/Y mean in the CSV (offset, expand, ratio).
+    The R offset doesn't matter here: R is derived from X/Y, not read from the instrument."""
+    mods = []
+    for k in ("X", "Y"):
+        o = (meta.get("output_processing") or {}).get(k) or {}
+        if o.get("offset_on"):
+            mods.append(f"{k} offset {o.get('offset_pct')}%")
+        if o.get("expand") not in (None, 1):
+            mods.append(f"{k} expand x{o.get('expand')}")
+        if o.get("ratio"):
+            mods.append(f"{k} ratio mode")
+    return mods
+
+
+def usbtmc_clear(resource):
+    """USB-TMC device clear straight over pyusb: INITIATE_CLEAR, CHECK_CLEAR_STATUS, then
+    clear the bulk-endpoint halts. Needed because on the bench (SR860 + pyvisa-py on
+    macOS) one failed transfer left the endpoint stalled across close/reopen and even a
+    USB port reset, and pyvisa-py has no viClear for USB. Returns a short status string,
+    or None when it doesn't apply (not a USB resource, pyusb unavailable -- e.g. NI-VISA
+    on Windows, which does its own clear). Never raises."""
+    m = re.match(r"USB\d*::([^:]+)::([^:]+)::([^:]+)::", resource or "")
+    if not m:
+        return None
+    try:
+        import usb.core
+        import usb.util
+    except ImportError:
+        return None
+
+    def num(s):
+        return int(s, 16) if s.lower().startswith("0x") else int(s)
+
+    try:
+        vid, pid, serial = num(m.group(1)), num(m.group(2)), m.group(3)
+        devices = list(usb.core.find(find_all=True, idVendor=vid, idProduct=pid))
+    except Exception as e:
+        return f"skipped ({type(e).__name__}: {e})"
+    for dev in devices:
+        try:
+            if usb.util.get_string(dev, dev.iSerialNumber) != serial:
+                continue
+            intf = next(i for i in dev.get_active_configuration()
+                        if i.bInterfaceClass == 0xFE and i.bInterfaceSubClass == 0x03)  # USB-TMC
+            n = intf.bInterfaceNumber
+            usb.util.claim_interface(dev, n)
+            try:
+                status = dev.ctrl_transfer(0xA1, 5, 0, n, 1, timeout=2000)[0]  # INITIATE_CLEAR
+                if status == 0x01:
+                    for _ in range(40):
+                        st = dev.ctrl_transfer(0xA1, 6, 0, n, 2, timeout=2000)  # CHECK_CLEAR_STATUS
+                        if st[0] != 0x02:  # 0x02 = still pending
+                            break
+                        time.sleep(0.05)
+                for ep in intf:
+                    dev.clear_halt(ep.bEndpointAddress)
+            finally:
+                usb.util.release_interface(dev, n)
+            return "ok"
+        except Exception as e:
+            return f"failed ({type(e).__name__}: {e})"
+        finally:
+            usb.util.dispose_resources(dev)
+    return "device not found on USB"
 
 
 def _positions_match(a, b, tol=1e-6):
@@ -576,17 +707,27 @@ class MockSR860:
         self.ref = _MockRef()
         self.signal = _MockSignal()
         self.status = _MockStatus()
+        self.output = _MockOutput()
         self.comm = self  # query_text lives here so snap_xyrt()'s inst.comm.query_text(...) works unchanged
 
     def check_id(self):
         return "SR860", "MOCK0001", "v1.50"
 
+    def set_timeout(self, seconds):
+        pass
+
     def query_text(self, cmd):
         if cmd.startswith("SNAP?"):
+            params = [p.strip() for p in cmd[5:].split(",")]
+            if not 2 <= len(params) <= 3:
+                # Like the real SR860 (which also stalls its USB endpoint on this).
+                raise IOError(f"SR860 SNAP? takes 2 or 3 parameters, got {len(params)}")
             t = time.monotonic() - self._t0
             x = 1e-6 * math.sin(2 * math.pi * 0.2 * t)
             y = 1e-6 * math.cos(2 * math.pi * 0.2 * t)
-            return f"{x:.9e},{y:.9e},{math.hypot(x, y):.9e},{math.degrees(math.atan2(y, x)):.4f}\n"
+            r_display = math.hypot(x, y) - 0.0221 * 5e-6  # R output with a 2.21% offset on, as on the bench
+            vals = {"0": x, "1": y, "2": r_display, "3": math.degrees(math.atan2(y, x))}
+            return ",".join(f"{vals[p]:.10e}" for p in params) + "\n"
         return "0\n"
 
     def disconnect(self):
@@ -617,3 +758,12 @@ class _MockSignal:
 
 class _MockStatus:
     overload = 0
+
+
+class _MockOutput:
+    # Matches the bench SR860: only the R offset is on.
+    def __init__(self):
+        self.offset = {"X": False, "Y": False, "R": True}
+        self.offset_percent = {"X": -1.06, "Y": -0.04, "R": 2.21}
+        self.expand = {"X": 1, "Y": 1, "R": 1}
+        self.ratio_mode = {"X": False, "Y": False, "R": False}

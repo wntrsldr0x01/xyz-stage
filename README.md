@@ -48,6 +48,19 @@ cable is in the rear USB-TMC port, not the front flash-drive port.
 `python3 server.py --mock` fakes the SR860 too (a slowly rotating X/Y signal),
 for UI work away from the bench.
 
+Measured on the bench (SR860 FW V1.51, macOS, pyvisa-py): a `SNAP? 0,1` round trip takes
+~11 ms (max ~20 ms), so 10 Hz runs hold 10.0 Hz with ~2.5 ms jitter; 20 Hz is the ceiling.
+Things the SR860 does over USB-TMC that the code relies on:
+- `SNAP?` takes 2 or 3 parameters (not 4+ like the SR830). X and Y come from one
+  `SNAP? 0,1`; R and θ are computed from them. The instrument's own R output includes its
+  R offset when that's enabled (it was, at 2.21%), so the front-panel R can differ from
+  `R_V` in the CSV. X/Y offset, expand and ratio settings are recorded in the run JSON and
+  flagged if on, since they change what `X_V`/`Y_V` mean.
+- It holds one pending reply, and reading with no reply pending stalls the USB endpoint,
+  which then stays stalled even across reconnects. Connect detects this and USB-TMC-clears
+  the link automatically. Any failed query during a run ends the run (marked incomplete)
+  and closes the session; press Connect to recover. Unplug/replug the cable if that fails.
+
 Each run writes `runs/AE_<date>_X.._Y.._Z.._<freq>_<id>.csv` (one row per sample, flushed
 as it's taken) and a `.json` sidecar (instrument settings, start/end position, achieved
 rate and jitter, overload/error counts, summary stats).

@@ -556,6 +556,8 @@ function fmtSummary(s){
     mc ? `mean complex |${fmtV(mc.magnitude_v)}| V ∠ ${mc.phase_deg.toFixed(2)}°` : '',
     s.stationary === false ? '⚠ stage moved during run' : '',
     s.settings_changed && s.settings_changed.length ? `⚠ settings changed: ${s.settings_changed.join(', ')}` : '',
+    s.xy_output_processing && s.xy_output_processing.length ? `⚠ X/Y include SR860 output processing: ${s.xy_output_processing.join(', ')}` : '',
+    s.end_reason && s.end_reason.startsWith('communication') ? `⚠ ${s.end_reason}` : '',
     s.file,
   ].filter(Boolean).join('\n');
 }
