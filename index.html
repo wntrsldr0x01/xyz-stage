@@ -149,12 +149,36 @@
   .daqgrid{display:grid;grid-template-columns:260px 1fr 280px;gap:8px}
   @media(max-width:1250px){.daqgrid{grid-template-columns:1fr 1fr}}
   .col{display:flex;flex-direction:column;gap:8px}
+
+  /* area sweep tab: the SR860 bars are hidden here (body.nosr) */
+  body.nosr .sr860bar{display:none}
+  .areagrid{display:grid;grid-template-columns:300px minmax(0,1fr) 350px;gap:6px;align-items:start}
+  @media(max-width:1280px){.areagrid{grid-template-columns:300px minmax(0,1fr)} .areagrid .right{grid-column:1/-1}}
+  .areagrid .dro div{font-size:17px;padding:6px}
+  .corners{display:grid;grid-template-columns:auto minmax(0,1fr) minmax(0,1fr) auto auto;gap:4px 5px;align-items:center}
+  .corners .hd{color:var(--dim);font-size:9px;font-weight:700;letter-spacing:1px}
+  .corners button{padding:3px 7px}
+  .ptag{font:700 11px var(--mono);padding:2px 0;border-radius:3px;color:#111;width:26px;text-align:center}
+  .ptag.p1{background:#ffd740} .ptag.p2{background:#ff9e40} .ptag.p3{background:#18ffff}
+  .cdesc{grid-column:2/-1;color:var(--dim);font-size:10px;margin:-3px 0 2px}
+  .astatus{font:11px/1.5 var(--mono);color:var(--title);background:#1e1e1e;border:1px solid #3a3a3a;border-radius:4px;padding:6px 8px;white-space:pre-wrap;min-height:44px}
+  .astatus .st{font-weight:700} .astatus .run{color:var(--good)} .astatus .pause{color:var(--warn)} .astatus .bad{color:var(--bad)}
+  table.kv td.warn{color:var(--warn)}
+  .unit{color:var(--dim);font-size:10px}
+  .aplanrow{display:grid;grid-template-columns:minmax(0,1fr) 170px;gap:6px;align-items:start}
+  .aruncol{display:flex;flex-direction:column;gap:6px;padding-top:7px}
+  .aruncol button{padding:7px 10px;font-size:12px}
+  #aErr:empty{display:none}
+  /* hover readout floats over the canvas so it can never reflow the layout */
+  .cvwrap{position:relative}
+  .ctip{position:absolute;left:0;top:0;pointer-events:none;z-index:2;background:rgba(18,18,18,.94);border:1px solid #5a5a5a;border-radius:4px;padding:4px 8px;font:11px/1.5 var(--mono);color:var(--ink);white-space:nowrap}
+  .ctip b{color:var(--title)} .ctip .d{color:var(--dim)}
 </style>
 </head>
 <body>
 
 <!-- ── Row 1: always-visible hardware bar ─────────────────────────────── -->
-<div class="bar">
+<div class="bar sr860bar">
   <b class="apptitle">AE DAQ Studio<span>v1.0 · SR860 lock-in</span></b>
   <span class="grow"></span>
   <span class="chip" id="chipDevice">Device: SR860</span>
@@ -170,7 +194,7 @@
 </div>
 
 <!-- ── Row 2: status lights ──────────────────────────────────────────── -->
-<div class="bar lights">
+<div class="bar lights sr860bar">
   <b class="small">Status:</b>
   <div class="light" data-light="link" title="USB-TMC session open"><i></i><span>LINK</span></div>
   <div class="light" data-light="live" title="Live view: polling, nothing saved"><i></i><span>LIVE</span></div>
@@ -186,7 +210,7 @@
 </div>
 
 <!-- ── Row 3: recording bar ──────────────────────────────────────────── -->
-<div class="bar recbar">
+<div class="bar recbar sr860bar">
   <button id="daqRecBtn" class="rec" title="Start a timed run (CSV + JSON); press again to stop">● Record</button>
   <button id="daqAbortBtn" class="abort" title="End now and mark the run aborted (data already written is kept)">Abort</button>
   <label class="inl">Limit <input id="daqDuration" class="hms" value="00:01:00" title="HH:MM:SS (or seconds). Blank or 00:00:00 = until stopped"></label>
@@ -199,12 +223,122 @@
 </div>
 
 <div class="tabbar">
+  <button class="tab" data-tab="area">Area Sweep</button>
   <button class="tab" data-tab="acq">Acquisition</button>
   <button class="tab" data-tab="inst">Instrument</button>
   <button class="tab" data-tab="diag">Diagnostics</button>
   <button class="tab" data-tab="logs">Log Analysis</button>
   <button class="tab" data-tab="scan">XYZ Scan</button>
   <button class="tab" data-tab="gantry">Gantry</button>
+</div>
+
+<!-- ══ Tab: Area Sweep ═══════════════════════════════════════════════ -->
+<div class="tabpane" id="tab-area">
+  <div class="toolbar" style="margin-bottom:6px">
+    <b class="sidetitle">Area Sweep</b><span class="note">3 corners · Z locked · stop at every point</span>
+    <b class="tlbl">GANTRY</b>
+    <select id="aPort" style="width:220px"></select>
+    <input id="aBaud" value="250000" style="width:72px" title="Baud rate">
+    <button id="aConnBtn" class="go">▶ Connect</button>
+    <span id="aConnPill" class="pill">offline</span>
+    <span id="aRefPill" class="pill warn">not referenced</span>
+    <span id="aBusyPill" class="pill">idle</span>
+    <span class="grow"></span>
+    <button class="estop" id="aEstop" title="M112. Marlin acts on it after the current move finishes; the power switch is the real e-stop.">E-STOP</button>
+  </div>
+  <div class="areagrid">
+    <div class="side">
+      <fieldset class="group"><legend>Position (mm)</legend>
+        <div class="dro">
+          <div><span class="ax-X">X</span><b id="aDX">—</b></div>
+          <div><span class="ax-Y">Y</span><b id="aDY">—</b></div>
+          <div><span class="ax-Z">Z</span><b id="aDZ">—</b></div>
+        </div>
+      </fieldset>
+      <fieldset class="group"><legend>Jog</legend>
+        <div class="steps" id="aSteps"></div>
+        <div class="pad">
+          <span></span><button data-j="Y+" class="ax-Y">Y+</button><span></span><span></span><button data-j="Z+" class="ax-Z">Z+</button>
+          <button data-j="X-" class="ax-X">X−</button><button id="aM114" title="Refresh position (M114)">⟳</button><button data-j="X+" class="ax-X">X+</button><span></span><span></span>
+          <span></span><button data-j="Y-" class="ax-Y">Y−</button><span></span><span></span><button data-j="Z-" class="ax-Z">Z−</button>
+        </div>
+        <div class="err" id="aJogErr"></div>
+        <div class="note">Keys on this tab: ←→ X · ↑↓ Y · PgUp/PgDn Z · [ ] step size. Jogging is locked while a sweep runs.</div>
+      </fieldset>
+      <fieldset class="group"><legend>Work zero</legend>
+        <div class="grid3">
+          <button data-zero="XYZ" class="pri">Zero XYZ</button>
+          <button data-zero="XY">Zero XY</button>
+          <button data-zero="Z">Zero Z</button>
+        </div>
+        <div class="note">No endstops: jog to the reference corner and zero there. Corners and soft limits are in this frame.</div>
+        <div id="aRestoreBox" class="restore" hidden>
+          <span class="note">The reconnect reset the board. If nothing was moved by hand, restore the last position so the corners still line up:</span>
+          <button id="aRestoreBtn" class="pri"></button>
+        </div>
+      </fieldset>
+    </div>
+
+    <div class="center">
+      <div class="toolbar">
+        <b class="tlbl">VIEW</b><span class="seg" id="aViewBtns"></span>
+        <span class="grow"></span>
+        <button id="aPng" class="tb">PNG</button>
+      </div>
+      <div class="cvwrap"><canvas id="aCv"></canvas><div id="aTip" class="ctip" hidden></div></div>
+      <div class="prog"><i id="aProg"></i></div>
+      <div class="astatus" id="aStatus">—</div>
+      <div class="err" id="aErr"></div>
+      <div class="aplanrow">
+        <fieldset class="group"><legend>Plan</legend><table class="kv" id="aPlan"></table></fieldset>
+        <div class="aruncol">
+          <button id="aStart" class="go">▶ Start sweep</button>
+          <button id="aPause">❚❚ Pause</button>
+          <button id="aStop" class="abort">■ Stop</button>
+          <span class="note">Pause and Stop act between points. Stop cuts a stop time short and marks that row dwell_cut.</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="side right">
+      <fieldset class="group"><legend>Rectangle corners</legend>
+        <div class="corners">
+          <span></span><span class="hd">X mm</span><span class="hd">Y mm</span><span></span><span></span>
+          <span class="ptag p1">P1</span><input data-a="p1x" type="number" step="0.1"><input data-a="p1y" type="number" step="0.1">
+          <button data-here="1" title="Use the current X/Y">← here</button><button data-gopt="1" title="Move to this corner (XY only, Z unchanged)">Go</button>
+          <span class="cdesc">start corner, shared by length and breadth</span>
+          <span class="ptag p2">P2</span><input data-a="p2x" type="number" step="0.1"><input data-a="p2y" type="number" step="0.1">
+          <button data-here="2" title="Use the current X/Y">← here</button><button data-gopt="2" title="Move to this corner (XY only, Z unchanged)">Go</button>
+          <span class="cdesc">end of the length (P1→P2)</span>
+          <span class="ptag p3">P3</span><input data-a="p3x" type="number" step="0.1"><input data-a="p3y" type="number" step="0.1">
+          <button data-here="3" title="Use the current X/Y">← here</button><button data-gopt="3" title="Move to this corner (XY only, Z unchanged)">Go</button>
+          <span class="cdesc">end of the breadth (P1→P3)</span>
+        </div>
+        <div class="note">Jog to each corner and press ← here, or type the values. The rectangle may be tilted; it is squared on P1→P2.</div>
+      </fieldset>
+      <fieldset class="group"><legend>Grid</legend>
+        <div class="frow"><span>Length step</span><div class="fl"><input data-a="step_length" type="number" min="0.001" step="0.1"><span class="unit">mm</span></div></div>
+        <div class="frow"><span>Breadth step</span><div class="fl"><input data-a="step_breadth" type="number" min="0.001" step="0.1"><span class="unit">mm</span></div></div>
+        <div class="frow"><span>Pattern</span><select data-a="pattern">
+          <option value="serpentine">Serpentine</option>
+          <option value="raster">Raster (one direction)</option></select></div>
+        <div class="note">Rows run along the length and step toward P3. Serpentine reverses every other row (shortest path). Raster runs every row P1→P2, so each point is approached from the same side (same backlash), with a return move per row.</div>
+      </fieldset>
+      <fieldset class="group"><legend>At each point</legend>
+        <div class="frow"><span>Z locked at</span><div class="fl"><input data-a="z" type="number" step="0.1"><span class="unit">mm</span><button id="aZHere" title="Use the current Z">← current Z</button></div></div>
+        <div class="frow"><span>Stop time</span><div class="fl"><input data-a="dwell_s" type="number" min="0" step="0.1"><span class="unit">s</span></div></div>
+        <div class="frow"><span>Travel feed</span><div class="fl"><input data-a="feed" type="number" min="1" step="10"><span class="unit">mm/min</span></div></div>
+        <label class="chk"><input data-a="return_to_start" type="checkbox"> Return to P1 when finished</label>
+        <div class="note">Each point: move → wait until stopped (M400) → position check (M114) → hold for the stop time → log.</div>
+      </fieldset>
+      <fieldset class="group"><legend>Record</legend>
+        <div class="frow"><span>Label</span><input data-a="label" placeholder="e.g. skullA_z12"></div>
+        <div class="frow"><span>Notes</span><input data-a="notes" placeholder="operator notes"></div>
+        <div class="frow"><span>Save folder</span><input data-a="data_dir"></div>
+        <div class="note">AREA_…csv: one row per point (position, readback, arrive/depart time), written as it goes. AREA_….json: the inputs and how the sweep ended.</div>
+      </fieldset>
+    </div>
+  </div>
 </div>
 
 <!-- ══ Tab: Acquisition ══════════════════════════════════════════════ -->
@@ -505,12 +639,14 @@ function err(id, msg){ $(id).textContent = msg || ''; if (msg) setTimeout(() => 
 async function act(path, body, errId='#jogErr'){ const r = await api(path, body); if (r && r.ok === false) err(errId, r.error); return r; }
 
 // ═════════════ tabs ═════════════
-let activeTab = 'acq';
+let activeTab = 'area';
 function setTab(t){
   activeTab = t;
   $$('.tab').forEach(b => b.classList.toggle('sel', b.dataset.tab === t));
   $$('.tabpane').forEach(p => p.classList.toggle('sel', p.id === 'tab-' + t));
-  try { localStorage.setItem('tab', t); history.replaceState(null, '', '#tab=' + t); } catch(e){}
+  document.body.classList.toggle('nosr', t === 'area');
+  try { history.replaceState(null, '', '#tab=' + t); } catch(e){}
+  if (t === 'area') scheduleAreaPreview();
   if (t === 'inst') loadSettings();
   if (t === 'logs') loadDaqHistory();
   if (t === 'scan') loadScans();
@@ -518,15 +654,19 @@ function setTab(t){
   redrawAll();
 }
 $$('.tab').forEach(b => b.onclick = () => setTab(b.dataset.tab));
-function redrawAll(){ drawLive(); drawHist(); drawHeatmap(); draw(); renderChannels(); renderDiag(); }
+function redrawAll(){ drawArea(); drawLive(); drawHist(); drawHeatmap(); draw(); renderChannels(); renderDiag(); }
 window.addEventListener('resize', () => redrawAll());
 
 // ═════════════ gantry (unchanged logic) ═════════════
 async function loadPorts(){
   const {ports} = await api('ports');
-  const sel = $('#port'); const cur = S?.cfg?.port;
-  sel.innerHTML = ports.map(p => `<option ${p===cur?'selected':''}>${esc(p)}</option>`).join('') || '<option>(no ports)</option>';
+  const cur = S?.cfg?.port;
+  for (const sel of [$('#port'), $('#aPort')])
+    sel.innerHTML = ports.map(p => `<option ${p===cur?'selected':''}>${esc(p)}</option>`).join('') || '<option>(no ports)</option>';
 }
+$('#port').onchange = () => { $('#aPort').value = $('#port').value; };
+$('#aPort').onchange = () => { $('#port').value = $('#aPort').value; };
+const jogErrId = () => activeTab === 'area' ? '#aJogErr' : '#jogErr';
 $('#connBtn').onclick = async () => {
   if (S?.connected) return act('disconnect', {});
   $('#connBtn').disabled = true; $('#connBtn').textContent = 'Connecting…';
@@ -535,18 +675,19 @@ $('#connBtn').onclick = async () => {
 };
 $('#estop').onclick = () => act('estop', {});
 
-$('#steps').innerHTML = STEPS.map(s => `<button data-step="${s}">${s}</button>`).join('');
+$('#steps').innerHTML = $('#aSteps').innerHTML = STEPS.map(s => `<button data-step="${s}">${s}</button>`).join('');
 function setStep(s){ step = s; $$('[data-step]').forEach(b => b.classList.toggle('sel', +b.dataset.step === s)); }
 $$('[data-step]').forEach(b => b.onclick = () => setStep(+b.dataset.step)); setStep(1);
 function jog(ax, dir){
   const feed = ax === 'Z' ? +$('#fZ').value : +$('#fXY').value;
-  act('jog', {axis: ax, delta: dir * step, feed});
+  act('jog', {axis: ax, delta: dir * step, feed}, jogErrId());
 }
 $$('[data-j]').forEach(b => b.onclick = () => jog(b.dataset.j[0], b.dataset.j[1] === '+' ? 1 : -1));
 $('#m114').onclick = () => act('send', {gcode:'M114'});
 document.addEventListener('keydown', e => {
-  // Jog keys act only on the Gantry tab: arrow keys pressed elsewhere must never move the stage.
-  if (activeTab !== 'gantry') return;
+  // Jog keys act only on the Gantry and Area Sweep tabs: arrow keys pressed elsewhere must never move the stage.
+  if (activeTab !== 'gantry' && activeTab !== 'area') return;
+  if (S?.area && ['running', 'paused'].includes(S.area.state)) return;
   if (['INPUT','TEXTAREA','SELECT'].includes(document.activeElement.tagName)) return;
   const k = {ArrowLeft:['X',-1], ArrowRight:['X',1], ArrowUp:['Y',1], ArrowDown:['Y',-1], PageUp:['Z',1], PageDown:['Z',-1]}[e.key];
   if (k){ e.preventDefault(); if (!e.repeat) jog(...k); return; }  // ignore auto-repeat so a held key can't queue a runaway move
@@ -555,7 +696,7 @@ document.addEventListener('keydown', e => {
   if (e.key === '[') setStep(STEPS[Math.max(0, i-1)]);
   if (e.key === ']') setStep(STEPS[Math.min(STEPS.length-1, i+1)]);
 });
-$$('[data-zero]').forEach(b => b.onclick = () => act('zero', {axes: b.dataset.zero}));
+$$('[data-zero]').forEach(b => b.onclick = () => act('zero', {axes: b.dataset.zero}, jogErrId()));
 $('#gotoZero').onclick = () => act('goto', {x:0, y:0});
 $('#motorsOff').onclick = () => act('send', {gcode:'M84'});
 const num = id => $(id).value === '' ? null : +$(id).value;
@@ -1340,6 +1481,304 @@ function drawHeatmap(){
 $('#hmPng').onclick = () => { if (hm) savePng($('#hmCv'), `${hm.name}_${$('#hmMetric').value}_Z${$('#hmPlane').value}`); };
 $('#hmCsv').onclick = () => { if (hm && hm.rows.length) download(new Blob([toCsv(hm.rows)], {type: 'text/csv'}), `${hm.name}.csv`); };
 
+// ═════════════ area sweep (3 corners, Z locked) ═════════════
+// The server owns the geometry (area.py): this side only collects inputs, shows the
+// returned plan and draws it. Corners are P1 (start), P2 (end of length), P3 (end of breadth).
+const P_COL = {1: '#ffd740', 2: '#ff9e40', 3: '#18ffff'};
+let aPlan = null, aPts = [], aErrMsg = '', aView = 'area', aDirty = false, aGeom = null, aTimer = null, aSeq = 0, aHoverIdx = -1;
+const aActive = () => !!S && ['running', 'paused'].includes(S.area.state);
+function aParams(){
+  const p = {};
+  $$('[data-a]').forEach(el => { p[el.dataset.a] = el.type === 'checkbox' ? el.checked : el.value; });
+  return p;
+}
+function fillArea(c){
+  $$('[data-a]').forEach(el => { const v = c[el.dataset.a]; if (v === undefined) return; el.type === 'checkbox' ? el.checked = !!v : el.value = v; });
+}
+function scheduleAreaPreview(){ clearTimeout(aTimer); aTimer = setTimeout(doAreaPreview, 150); }
+async function doAreaPreview(){
+  const seq = ++aSeq, r = await api('area/preview', aParams());
+  if (seq !== aSeq) return;  // a newer edit is already on its way
+  aPlan = r.plan || null; aPts = r.points || []; aErrMsg = r.error || '';
+  renderAreaPlan(); drawArea();
+}
+function fmtDur(s){
+  if (!(s >= 0)) return '—';
+  if (s < 90) return `${s.toFixed(0)} s`;
+  if (s < 5400) return `${(s / 60).toFixed(1)} min`;
+  return `${Math.floor(s / 3600)} h ${Math.round((s % 3600) / 60)} min`;
+}
+function renderAreaPlan(){
+  const pl = aPlan, p = aParams(), rows = [], f3 = v => (+v).toFixed(3);
+  if (pl){
+    rows.push(['Length P1→P2', `${f3(pl.length_mm)} mm at ${pl.rotation_deg.toFixed(2)}° to +X`]);
+    rows.push(['Breadth P1→P3', `${f3(pl.breadth_mm)} mm`]);
+    const sq = pl.p3_squared_by_mm;
+    rows.push(['Corner at P1', `${pl.angle_at_p1_deg.toFixed(2)}°` + (sq > 0.0005 ? ` · P3 squared by ${f3(sq)} mm` : ' · square'), sq > 0.05 ? 'warn' : '']);
+    rows.push(['Grid', `${pl.n_length} along length × ${pl.n_breadth} rows = ${pl.n_points} points`]);
+    const last = (gap, st, n) => n > 1 && Math.abs(gap - st) > 1e-3 ? ` (last ${f3(gap)})` : '';
+    rows.push(['Spacing', `${+p.step_length}${last(pl.last_gap_length_mm, +p.step_length, pl.n_length)} × ${+p.step_breadth}${last(pl.last_gap_breadth_mm, +p.step_breadth, pl.n_breadth)} mm`]);
+    const z = +p.z, cz = S && S.pos.Z;
+    const zMove = cz != null && Math.abs(cz - z) > 0.0005;
+    rows.push(['Z locked', `${f3(z)} mm` + (zMove ? ` · stage at ${f3(cz)}: ${cz < z ? 'rises before travelling to P1' : 'lowers after reaching P1'}` : ''), zMove ? 'warn' : '']);
+    rows.push(['Stop time', `${+p.dwell_s} s at every point`]);
+    const capped = +p.feed > pl.feed_effective_mm_min;
+    rows.push(['Travel feed', capped ? `${+p.feed} mm/min: firmware caps X/Y at ${pl.feed_effective_mm_min} mm/min` : `${+p.feed} mm/min`, capped ? 'warn' : '']);
+    rows.push(['Path · time', `${pl.path_mm.toFixed(1)} mm · ≈ ${fmtDur(pl.est_s)}`]);
+  }
+  $('#aPlan').innerHTML = rows.map(([k, v, c]) => `<tr><td>${esc(k)}</td><td class="${c || ''}">${esc(v)}</td></tr>`).join('')
+    || '<tr><td colspan="2">no valid rectangle yet</td></tr>';
+  $('#aErr').textContent = aErrMsg ? '⚠ ' + aErrMsg : '';
+}
+
+function drawArea(){
+  const cv = $('#aCv');
+  if (!visible(cv)) return;
+  const [g, W, H] = fitCanvas(cv, 0.72, Math.max(340, window.innerHeight - 400), 300);
+  g.fillStyle = '#252525'; g.fillRect(0, 0, W, H);
+  if (!S) return;
+  const p = aParams(), pos = S.pos, Lm = S.cfg.limits, A = S.area;
+  const P = [1, 2, 3].map(n => p[`p${n}x`] === '' || p[`p${n}y`] === '' ? null : [+p[`p${n}x`], +p[`p${n}y`]]);
+
+  // equal-aspect view around the rectangle, the typed corners and the stage (or the whole bed)
+  const xs = [], ys = [], add = (x, y) => { if (isFinite(x) && isFinite(y)){ xs.push(x); ys.push(y); } };
+  P.forEach(q => q && add(...q));
+  if (aPlan) aPlan.corners.forEach(c => add(...c));
+  if (pos.X !== null) add(pos.X, pos.Y);
+  if (aView === 'bed' || !xs.length){ add(Lm.X[0], Lm.Y[0]); add(Lm.X[1], Lm.Y[1]); }
+  let x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+  const m = Math.max(x1 - x0, y1 - y0, 1) * 0.08; x0 -= m; x1 += m; y0 -= m; y1 += m;
+  const Lp = 58, Rp = 14, Tp = 26, Bp = 38, pw = W - Lp - Rp, ph = H - Tp - Bp;
+  const sc = Math.min(pw / (x1 - x0), ph / (y1 - y0)), cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+  const tx = x => Lp + pw / 2 + (x - cx) * sc, ty = y => Tp + ph / 2 - (y - cy) * sc;
+  aGeom = {cx, cy, sc, Lp, Tp, pw, ph};
+  const vx0 = cx - pw / 2 / sc, vx1 = cx + pw / 2 / sc, vy0 = cy - ph / 2 / sc, vy1 = cy + ph / 2 / sc;
+  const st = niceStep(vx1 - vx0, Math.max(3, Math.round(pw / 90)));   // same mm step on both axes
+  const tk = (lo, hi) => { const o = []; for (let t = Math.ceil(lo / st) * st; t <= hi + st * 1e-9; t += st) o.push(Math.abs(t) < st * 1e-9 ? 0 : t); return o; };
+  const xt = tk(vx0, vx1), yt = tk(vy0, vy1);
+
+  g.save(); g.beginPath(); g.rect(Lp, Tp, pw, ph); g.clip();
+  g.strokeStyle = GRID; g.lineWidth = 1;
+  for (const t of xt){ const X = Math.round(tx(t)) + .5; g.beginPath(); g.moveTo(X, Tp); g.lineTo(X, Tp + ph); g.stroke(); }
+  for (const t of yt){ const Y = Math.round(ty(t)) + .5; g.beginPath(); g.moveTo(Lp, Y); g.lineTo(Lp + pw, Y); g.stroke(); }
+  // soft limits
+  g.strokeStyle = 'rgba(255,215,64,.45)'; g.setLineDash([6, 4]);
+  g.strokeRect(tx(Lm.X[0]), ty(Lm.Y[1]), (Lm.X[1] - Lm.X[0]) * sc, (Lm.Y[1] - Lm.Y[0]) * sc); g.setLineDash([]);
+  g.fillStyle = 'rgba(255,215,64,.7)'; g.font = '10px ' + SANS;
+  g.fillText('soft limits', tx(Lm.X[0]) + 4, ty(Lm.Y[1]) + 12);
+
+  const C = aPlan && aPlan.corners;
+  if (C){
+    g.beginPath(); C.forEach((c, i) => i ? g.lineTo(tx(c[0]), ty(c[1])) : g.moveTo(tx(c[0]), ty(c[1]))); g.closePath();
+    g.fillStyle = 'rgba(68,138,255,.09)'; g.fill();
+    g.strokeStyle = 'rgba(176,190,197,.5)'; g.lineWidth = 1; g.stroke();
+    const edge = (a, b, col) => { g.strokeStyle = col; g.lineWidth = 3; g.beginPath(); g.moveTo(tx(a[0]), ty(a[1])); g.lineTo(tx(b[0]), ty(b[1])); g.stroke(); };
+    edge(C[0], C[1], P_COL[2]); edge(C[0], C[3], P_COL[3]);
+  }
+
+  // path and points; progress colouring only when the drawn plan is the one that ran
+  const n = aPts.length, showProg = A.state !== 'idle' && !aDirty;
+  const done = showProg ? A.points_done : 0, cur = showProg && aActive() ? A.index : -1;
+  if (n && C){
+    const sl = Math.min(+p.step_length || 1, aPlan.length_mm), sb = Math.min(+p.step_breadth || 1, aPlan.breadth_mm);
+    const dpx = Math.min(sl, sb) * sc, r = Math.max(1.2, Math.min(4.5, dpx * 0.28));
+    const line = (from, to, col, w) => {
+      if (to - from < 1) return;
+      g.strokeStyle = col; g.lineWidth = w; g.beginPath();
+      for (let i = from; i <= to; i++){ const q = aPts[i]; i === from ? g.moveTo(tx(q.x), ty(q.y)) : g.lineTo(tx(q.x), ty(q.y)); }
+      g.stroke();
+    };
+    line(Math.max(0, done - 1), n - 1, dpx < 3 ? 'rgba(144,164,174,.35)' : 'rgba(144,164,174,.45)', 1);
+    if (done > 1) line(0, done - 1, 'rgba(105,240,174,.75)', dpx < 3 ? 1 : 1.5);
+    if (dpx >= 2.5){
+      const dots = (from, to, col) => {
+        g.fillStyle = col; g.beginPath();
+        for (let i = from; i < to; i++){ const q = aPts[i], X = tx(q.x), Y = ty(q.y); g.moveTo(X + r, Y); g.arc(X, Y, r, 0, 7); }
+        g.fill();
+      };
+      dots(done, n, '#7a7a7a'); dots(0, done, '#69f0ae');
+    }
+    if (cur >= 0 && cur < n){
+      const q = aPts[cur], X = tx(q.x), Y = ty(q.y);
+      g.strokeStyle = '#fff'; g.lineWidth = 2; g.beginPath(); g.arc(X, Y, r + 4, 0, 7); g.stroke();
+    }
+    if (aHoverIdx >= 0 && aHoverIdx < n){
+      const q = aPts[aHoverIdx], X = tx(q.x), Y = ty(q.y);
+      g.strokeStyle = '#ffd740'; g.lineWidth = 1.5; g.beginPath(); g.arc(X, Y, r + 3, 0, 7); g.stroke();
+    }
+  }
+
+  // edge labels: along the edge, outside the rectangle, kept upright
+  if (C){
+    const ctr = [(C[0][0] + C[2][0]) / 2, (C[0][1] + C[2][1]) / 2];
+    const label = (a, b, text, col) => {
+      const ax = tx(a[0]), ay = ty(a[1]), bx = tx(b[0]), by = ty(b[1]), mx = (ax + bx) / 2, my = (ay + by) / 2;
+      let nx = -(by - ay), ny = bx - ax; const l = Math.hypot(nx, ny) || 1; nx /= l; ny /= l;
+      if ((mx - tx(ctr[0])) * nx + (my - ty(ctr[1])) * ny < 0){ nx = -nx; ny = -ny; }
+      let ang = Math.atan2(by - ay, bx - ax);
+      if (ang > Math.PI / 2) ang -= Math.PI; if (ang < -Math.PI / 2) ang += Math.PI;
+      g.save(); g.translate(mx + nx * 13, my + ny * 13); g.rotate(ang);
+      g.textAlign = 'center'; g.textBaseline = 'middle'; g.font = 'bold 11px ' + SANS; g.fillStyle = col;
+      g.fillText(text, 0, 0); g.restore();
+    };
+    label(C[0], C[1], `length ${aPlan.length_mm.toFixed(3)} mm · ${aPlan.n_length} pts`, P_COL[2]);
+    label(C[0], C[3], `breadth ${aPlan.breadth_mm.toFixed(3)} mm · ${aPlan.n_breadth} rows`, P_COL[3]);
+    // where squaring put P3, if it moved
+    if (P[2] && aPlan.p3_squared_by_mm > 0.0005){
+      g.strokeStyle = P_COL[3]; g.setLineDash([3, 3]); g.lineWidth = 1;
+      g.beginPath(); g.moveTo(tx(P[2][0]), ty(P[2][1])); g.lineTo(tx(C[3][0]), ty(C[3][1])); g.stroke(); g.setLineDash([]);
+      g.beginPath(); g.arc(tx(C[3][0]), ty(C[3][1]), 5, 0, 7); g.stroke();
+    }
+  }
+  // the three corners as given
+  P.forEach((q, i) => {
+    if (!q) return;
+    const X = tx(q[0]), Y = ty(q[1]);
+    g.fillStyle = P_COL[i + 1]; g.strokeStyle = '#111'; g.lineWidth = 1.5;
+    g.beginPath(); g.arc(X, Y, 6, 0, 7); g.fill(); g.stroke();
+    g.font = 'bold 12px ' + MONO; g.fillText(`P${i + 1}`, X + 8, Y - 8);
+  });
+  // stage position
+  if (pos.X !== null){
+    const X = tx(pos.X), Y = ty(pos.Y);
+    g.strokeStyle = '#ff5252'; g.lineWidth = 2; g.beginPath();
+    g.moveTo(X - 11, Y); g.lineTo(X - 4, Y); g.moveTo(X + 4, Y); g.lineTo(X + 11, Y);
+    g.moveTo(X, Y - 11); g.lineTo(X, Y - 4); g.moveTo(X, Y + 4); g.lineTo(X, Y + 11); g.stroke();
+    g.beginPath(); g.arc(X, Y, 4, 0, 7); g.stroke();
+  }
+  g.restore();
+
+  // frame, ticks, axis titles, legend
+  g.strokeStyle = FRAME; g.lineWidth = 1; g.strokeRect(Lp + .5, Tp + .5, pw, ph);
+  const dec = decimalsFor(st);
+  g.fillStyle = FG; g.font = '10px ' + MONO; g.textAlign = 'center';
+  for (const t of xt) g.fillText(t.toFixed(dec), tx(t), Tp + ph + 13);
+  g.textAlign = 'right';
+  for (const t of yt) g.fillText(t.toFixed(dec), Lp - 5, ty(t) + 3);
+  g.textAlign = 'center'; g.font = '11px ' + SANS;
+  g.fillText('X (mm)', Lp + pw / 2, H - 6);
+  g.save(); g.translate(14, Tp + ph / 2); g.rotate(-Math.PI / 2); g.fillText('Y (mm)', 0, 0); g.restore();
+  g.textAlign = 'left'; g.font = '11px ' + SANS;
+  let lx = Lp;
+  const item = (col, text, ring) => {
+    g.fillStyle = col; g.strokeStyle = col; g.lineWidth = 2; g.beginPath(); g.arc(lx + 5, 13, 4, 0, 7); ring ? g.stroke() : g.fill();
+    g.fillStyle = FG; g.fillText(text, lx + 13, 17); lx += 22 + g.measureText(text).width;
+  };
+  item('#7a7a7a', 'pending'); item('#69f0ae', 'done'); item('#fff', 'current', true); item('#ff5252', 'stage', true);
+  g.fillStyle = FG; g.textAlign = 'right';
+  g.fillText(n ? `${n} points · gridlines every ${st} mm` : (aErrMsg ? 'no valid rectangle: see Plan' : ''), W - Rp, 17);
+  g.textAlign = 'left';
+}
+$('#aCv').addEventListener('mousemove', e => {
+  const tip = $('#aTip'), G = aGeom;
+  if (!G) return;
+  const b = $('#aCv').getBoundingClientRect(), mx = e.clientX - b.left, my = e.clientY - b.top;
+  if (mx < G.Lp || mx > G.Lp + G.pw || my < G.Tp || my > G.Tp + G.ph){ hideAreaTip(); return; }
+  const x = G.cx + (mx - G.Lp - G.pw / 2) / G.sc, y = G.cy - (my - G.Tp - G.ph / 2) / G.sc;
+  let best = -1, bd = (10 / G.sc) ** 2;   // nearest point within 10 px
+  for (let i = 0; i < aPts.length; i++){ const d = (aPts[i].x - x) ** 2 + (aPts[i].y - y) ** 2; if (d < bd){ bd = d; best = i; } }
+  const q = aPts[best];
+  tip.innerHTML = q
+    ? `<b>point ${best + 1} of ${aPts.length}</b> <span class="d">· row ${q.row + 1}, col ${q.col + 1}</span><br>`
+      + `X ${q.x.toFixed(3)}  Y ${q.y.toFixed(3)} mm<br><span class="d">${q.a.toFixed(3)} along length · ${q.b.toFixed(3)} along breadth</span>`
+    : `X ${x.toFixed(3)}  Y ${y.toFixed(3)} mm`;
+  tip.hidden = false;
+  // beside the cursor, flipped to the other side near the right/bottom edge
+  const w = tip.offsetWidth, h = tip.offsetHeight;
+  tip.style.left = (mx + 14 + w > b.width - 4 ? Math.max(4, mx - 14 - w) : mx + 14) + 'px';
+  tip.style.top = (my + 14 + h > b.height - 4 ? Math.max(4, my - 14 - h) : my + 14) + 'px';
+  if (best !== aHoverIdx){ aHoverIdx = best; drawArea(); }   // redraw only when the ringed point changes
+});
+function hideAreaTip(){
+  $('#aTip').hidden = true;
+  if (aHoverIdx !== -1){ aHoverIdx = -1; drawArea(); }
+}
+$('#aCv').addEventListener('mouseleave', hideAreaTip);
+segmented($('#aViewBtns'), [['area', 'Fit area'], ['bed', 'Whole bed']], () => aView, v => { aView = v; drawArea(); });
+$('#aPng').onclick = () => savePng($('#aCv'), `area_${(aParams().label || 'plan')}`);
+
+$$('[data-a]').forEach(el => el.addEventListener('input', () => { aDirty = true; renderAreaPlan(); scheduleAreaPreview(); }));
+$$('[data-here]').forEach(b => b.onclick = () => {
+  if (!S || S.pos.X === null) return err('#aErr', 'stage position unknown: connect, then ⟳');
+  const n = b.dataset.here;
+  $(`[data-a=p${n}x]`).value = +S.pos.X.toFixed(4); $(`[data-a=p${n}y]`).value = +S.pos.Y.toFixed(4);
+  aDirty = true; scheduleAreaPreview();
+});
+$$('[data-gopt]').forEach(b => b.onclick = () => {
+  const n = b.dataset.gopt, x = $(`[data-a=p${n}x]`).value, y = $(`[data-a=p${n}y]`).value;
+  if (x === '' || y === '') return err('#aJogErr', `P${n} has no X/Y yet`);
+  act('goto', {x: +x, y: +y, feed: +$('[data-a=feed]').value || null}, '#aJogErr');
+});
+$('#aZHere').onclick = () => {
+  if (!S || S.pos.Z === null) return err('#aErr', 'stage position unknown: connect, then ⟳');
+  $('[data-a=z]').value = +S.pos.Z.toFixed(4); aDirty = true; scheduleAreaPreview();
+};
+$('#aM114').onclick = () => act('send', {gcode: 'M114'}, '#aJogErr');
+$('#aRestoreBtn').onclick = () => act('restore', {}, '#aJogErr');
+$('#aEstop').onclick = () => act('estop', {}, '#aErr');
+$('#aConnBtn').onclick = async () => {
+  if (S?.connected) return act('disconnect', {}, '#aJogErr');
+  $('#aConnBtn').disabled = true; $('#aConnBtn').textContent = 'Connecting…';
+  await act('connect', {port: $('#aPort').value, baud: +$('#aBaud').value}, '#aJogErr');
+  $('#aConnBtn').disabled = false;
+};
+$('#aStart').onclick = async () => {
+  clearTimeout(aTimer); await doAreaPreview();  // start from exactly what is on screen
+  if (!aPlan || aErrMsg) return;
+  const p = aParams(), z = +p.z, cz = S.pos.Z;
+  const zMsg = cz != null && Math.abs(cz - z) > 0.0005
+    ? `\n\nZ moves from ${cz.toFixed(3)} to ${z.toFixed(3)} mm first (${cz < z ? 'rises, then travels to P1' : 'travels to P1, then lowers'}).` : '';
+  if (!confirm(`Sweep ${aPlan.n_points} points (${aPlan.n_length} × ${aPlan.n_breadth}) with Z locked at ${z.toFixed(3)} mm,\nstopping ${+p.dwell_s} s at each point. Estimated ${fmtDur(aPlan.est_s)}.${zMsg}`)) return;
+  aDirty = false;
+  act('area/start', p, '#aErr');
+};
+$('#aPause').onclick = () => act('area/pause', {pause: S.area.state !== 'paused'}, '#aErr');
+$('#aStop').onclick = () => act('area/stop', {}, '#aErr');
+
+function renderArea(){
+  for (const a of ['X', 'Y', 'Z']) $('#aD' + a).textContent = S.pos[a] === null ? '—' : S.pos[a].toFixed(3);
+  $('#aConnBtn').textContent = S.connected ? '■ Disconnect' : '▶ Connect';
+  $('#aConnBtn').className = S.connected ? '' : 'go';
+  for (const [src, dst] of [['#connPill', '#aConnPill'], ['#refPill', '#aRefPill'], ['#busyPill', '#aBusyPill']]){
+    $(dst).textContent = $(src).textContent; $(dst).className = $(src).className;
+  }
+  $('#aRestoreBox').hidden = $('#restoreBox').hidden; $('#aRestoreBtn').textContent = $('#restoreBtn').textContent;
+  $('#aEstop').disabled = !S.connected;
+  const A = S.area, active = aActive();
+  const otherBusy = ['running', 'paused'].includes(S.sweep.state) || S.scan.state === 'running';
+  $('#aStart').disabled = active || !S.connected || S.halted || !aPlan || !!aErrMsg || otherBusy;
+  $('#aStart').title = otherBusy ? 'a grid sweep or XYZ scan is running' : !S.connected ? 'connect the gantry first' : '';
+  $('#aPause').disabled = $('#aStop').disabled = !active;
+  $('#aPause').textContent = A.state === 'paused' ? '▶ Resume' : '❚❚ Pause';
+  $$('[data-a]').forEach(el => el.disabled = active);
+  $$('[data-here],[data-gopt],#aZHere').forEach(el => el.disabled = active || !S.connected);  // offline = stale position
+  $$('#tab-area [data-j],#tab-area [data-zero],#aM114').forEach(el => el.disabled = active || !S.connected);
+  $('#aProg').style.width = A.total ? (100 * A.points_done / A.total) + '%' : '0';
+
+  let html;
+  const now = Date.now() / 1000, el = A.started ? (A.ended || now) - A.started : 0;
+  if (A.state === 'idle'){
+    html = !S.connected ? 'Connect the gantry (top bar), zero it at the reference corner, then set the three corners.'
+         : !S.referenced ? 'Zero the stage (or Restore) so the corners and soft limits mean something.'
+         : 'Ready: set P1, P2, P3, the steps, Z and the stop time, check the plan, then Start.';
+    html = esc(html);
+  } else if (active){
+    const q = !aDirty && aPts[A.index], ph = A.phase;
+    const what = ph === 'dwell' ? `holding · ${Math.max(0, A.dwell_s - (now - A.phase_started)).toFixed(1)} s left`
+               : ph === 'approach' || ph === 'starting' ? 'moving to P1' : ph === 'returning' ? 'returning to P1'
+               : ph === 'paused' ? `paused · resumes at point ${A.index + (A.points_done > A.index ? 2 : 1)}` : 'moving';
+    const left = A.points_done ? el / A.points_done * (A.total - A.points_done) : (A.est_s || 0) - el;
+    html = `<span class="st ${A.state === 'paused' ? 'pause' : 'run'}">${A.state.toUpperCase()}</span> · point ${Math.min(A.index + 1, A.total)} of ${A.total}`
+         + (q ? ` · row ${q.row + 1}/${aPlan ? aPlan.n_breadth : '?'} · X ${q.x.toFixed(3)} Y ${q.y.toFixed(3)}` : '') + ` · ${esc(what)}\n`
+         + `elapsed ${fmtHMS(el)} · ≈ ${fmtDur(Math.max(0, left))} left · ${A.points_done} logged\n→ ${esc(A.file || '')}`;
+  } else {
+    const cls = A.state === 'done' ? 'run' : A.state === 'stopped' ? 'pause' : 'bad';
+    html = `<span class="st ${cls}">${A.state.toUpperCase()}</span> · ${esc(A.msg)} · ${A.points_done}/${A.total} points logged\n→ ${esc(A.file || '')}`;
+  }
+  $('#aStatus').innerHTML = html;
+  if (activeTab === 'area') drawArea();
+}
+
 // ═════════════ status rendering ═════════════
 function setLight(name, color){
   const el = $(`[data-light="${name}"]`), dot = el.querySelector('i');
@@ -1379,6 +1818,7 @@ async function poll(){
     if (!cfgLoaded){
       cfgLoaded = true;
       fillCfg(S.cfg); loadPorts(); schedulePreview(); renderPts(); renderHome();
+      fillArea(S.cfg.area || {});
       if (d.cfg.resource) $('#daqResource').dataset.saved = d.cfg.resource;
       loadDaqResources(); loadControls();
       $('#daqDataDir').value = d.cfg.data_dir;
@@ -1388,9 +1828,8 @@ async function poll(){
       $('#daqLive').checked = d.cfg.monitor !== false;
       $('#scZ').value = d.cfg.scan_z_planes || '';
       if (d.cfg.scan_duration_s) $('#scDur').value = d.cfg.scan_duration_s;
-      let t = (location.hash.match(/tab=(\w+)/) || [])[1] || null;
-      if (!t) try { t = localStorage.getItem('tab'); } catch(e){}
-      setTab(t && $(`#tab-${t}`) ? t : 'acq');
+      const t = (location.hash.match(/tab=(\w+)/) || [])[1] || null;
+      setTab(t && $(`#tab-${t}`) ? t : 'area');
     }
 
     // ---- gantry ----
@@ -1423,6 +1862,7 @@ async function poll(){
       if (atBottom) box.scrollTop = box.scrollHeight;
     }
     if (activeTab === 'gantry') draw();
+    renderArea();
 
     // ---- SR860 sample stream ----
     if (d.stream.id !== stream.id) stream = {id: d.stream.id, kind: d.stream.kind, samples: []};

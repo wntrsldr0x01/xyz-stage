@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Jog + grid-sweep console for the modified Anycubic i3 Mega S gantry.
+"""Jog, grid-sweep and 3-point area-sweep console for the modified Anycubic i3 Mega S gantry.
 
 Run:  python3 server.py            (then open http://localhost:8780)
       python3 server.py --mock     (simulated printer, no hardware)
@@ -19,6 +19,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs
 
+import area
 import daq
 import scan
 
@@ -44,6 +45,7 @@ DEFAULT_CONFIG = {
         "start_index": 0,
     },
     "daq": dict(daq.DEFAULT_DAQ_CONFIG),
+    "area": dict(area.DEFAULT_AREA_CONFIG),
 }
 
 
@@ -586,12 +588,13 @@ def list_ports():
 
 
 # Anything that moves the stage, re-references it, resets the board or starts another
-# acquisition would corrupt a scan in progress. E-stop and disconnects stay allowed.
+# acquisition would corrupt a scan or area sweep in progress. E-stop and disconnects stay allowed.
 BLOCKED_DURING_SCAN = {"connect", "send", "jog", "goto", "goto_safe", "zero", "restore", "home/go",
-                       "sweep/start", "daq/connect", "daq/run/start", "daq/set", "daq/action"}
+                       "sweep/start", "scan/start", "area/start",
+                       "daq/connect", "daq/run/start", "daq/set", "daq/action"}
 
 
-def make_handler(m: Machine, lk: daq.Lockin, sc: scan.Scanner):
+def make_handler(m: Machine, lk: daq.Lockin, sc: scan.Scanner, ar: area.AreaSweep):
     class H(BaseHTTPRequestHandler):
         def log_message(self, *a):
             pass
@@ -620,6 +623,7 @@ def make_handler(m: Machine, lk: daq.Lockin, sc: scan.Scanner):
                 # Separate cursor: the two logs number their entries independently.
                 state["daq"] = lk.state(int(q.get("dsince", [0])[0]), int(q.get("ssince", [0])[0]))
                 state["scan"] = dict(sc.state)
+                state["area"] = dict(ar.state)
                 self._json(state)
             elif path.path == "/api/ports":
                 self._json({"ports": list_ports()})
@@ -673,6 +677,22 @@ def make_handler(m: Machine, lk: daq.Lockin, sc: scan.Scanner):
             try:
                 if sc.active and route in BLOCKED_DURING_SCAN:
                     r = {"ok": False, "error": "scan in progress: stop the scan first"}
+                elif ar.active and route in BLOCKED_DURING_SCAN:
+                    r = {"ok": False, "error": "area sweep in progress: stop it first"}
+                elif route == "area/preview":
+                    r = {"ok": True, **ar.plan(data)}
+                    if r["params"] and not ar.active:  # remember valid inputs, e.g. captured corners
+                        m.cfg["area"].update(r["params"])
+                        save_config(m.cfg)
+                elif route == "area/start":
+                    r = ar.start(data)
+                    if r.get("ok"):  # a reload mid-sweep then shows the inputs that are running
+                        m.cfg["area"].update(area.parse_params(data))
+                        save_config(m.cfg)
+                elif route == "area/pause":
+                    r = ar.pause(bool(data.get("pause", True)))
+                elif route == "area/stop":
+                    r = ar.stop()
                 elif route == "scan/preview":
                     pts, err = sc.plan(data)
                     r = {"ok": True, "points": pts, "warning": err}
@@ -710,7 +730,7 @@ def make_handler(m: Machine, lk: daq.Lockin, sc: scan.Scanner):
                 elif route == "restore":
                     r = m.restore_position()
                 elif route == "estop":
-                    m.emergency_stop(); r = {"ok": True}
+                    m.emergency_stop(); r = {"ok": True}  # an area sweep sees the halt and ends as an error
                 elif route == "config":
                     for k, v in data.items():
                         if isinstance(v, dict) and isinstance(m.cfg.get(k), dict):
@@ -796,11 +816,13 @@ def main():
     m = Machine(cfg, mock=a.mock)
     lk = daq.Lockin(cfg["daq"], position_fn=lambda: m.pos, mock=a.mock)
     sc = scan.Scanner(m, lk)
-    srv = ThreadingHTTPServer((a.host, a.port), make_handler(m, lk, sc))
+    ar = area.AreaSweep(m)
+    srv = ThreadingHTTPServer((a.host, a.port), make_handler(m, lk, sc, ar))
     print(f"gantry console on http://localhost:{a.port}  ({'MOCK' if a.mock else 'serial'})")
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
+        ar.stop()
         sc.stop()
         m.disconnect()
         lk.disconnect()
