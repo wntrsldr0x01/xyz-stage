@@ -65,6 +65,27 @@ Each run writes `runs/AE_<date>_X.._Y.._Z.._<freq>_<id>.csv` (one row per sample
 as it's taken) and a `.json` sidecar (instrument settings, start/end position, achieved
 rate and jitter, overload/error counts, summary stats).
 
+## Area sweep (3 corners, Z locked)
+The app opens on the **Area Sweep** tab. Give three XY corners of the rectangle:
+**P1** the start corner, **P2** the end of the length (P1→P2) and **P3** the end of the
+breadth (P1→P3). Jog to each corner and press *← here*, or type the values. The rectangle
+may be tilted relative to the machine axes. It is squared on P1→P2 (the breadth is P3's
+perpendicular distance from the P1–P2 line), and the plan shows how far that moved P3. A
+corner more than 5° from square is refused as a likely wrong point.
+
+Inputs: a step in mm along the length and along the breadth (the last row/column always
+lands on the far edge), the locked Z, the stop time per point, travel feed (Marlin caps X/Y
+at 600 mm/min) and serpentine or raster order. Rows run along the length and step toward P3.
+
+At each point: `G1 X Y Z` → `M400` (stage stopped) → `M114` readback must match within
+0.01 mm → hold for the stop time → one CSV row. Another instrument measures during the
+hold. `runs/AREA_<date>_<time>_<label>.csv` has one row per point (index, row/col,
+position along length/breadth, commanded and read-back XYZ, arrive/depart UTC and
+elapsed time, actual stop time, status), written and flushed as it goes. The `.json`
+beside it holds the inputs, the squared rectangle and how the sweep ended. Pause and
+Stop act between points. Stop during a hold cuts it short and marks that row `dwell_cut`.
+Jogging and other motion are refused while a sweep runs; E-stop isn't.
+
 ## XYZ scan
 The **XYZ scan** panel runs the Grid sweep's XY grid over one or more Z planes, using the
 SR860 panel's rate/settle/condition. Per point: move, `M400`, `M114` readback check,
